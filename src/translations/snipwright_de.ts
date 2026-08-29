@@ -51,6 +51,94 @@
     </message>
 </context>
 <context>
+    <name>AdDetectionPage</name>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="49" />
+        <source>Chalkline (built in)</source>
+        <translation>Chalkline (integriert)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="50" />
+        <source>Comskip (external program)</source>
+        <translation>Comskip (externes Programm)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="56" />
+        <source>Which detector finds the advert breaks, in the editor and the Watcher alike.</source>
+        <translation>Welcher Detektor die Werbeunterbrechungen findet – im Editor ebenso wie im Watcher.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="62" />
+        <source>Chalkline</source>
+        <translation>Chalkline</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="66" />
+        <source>Built into Snipwright, so there is nothing to install or configure. It reads the channel logo, the picture shape and the aspect ratio, and reports nothing at all when it cannot tell - rather than guessing and removing part of the programme.</source>
+        <translation>In Snipwright integriert, es ist also nichts zu installieren oder einzurichten. Chalkline wertet das Senderlogo, die Bildform und das Seitenverhältnis aus und meldet lieber gar nichts, wenn es sich nicht sicher ist – statt zu raten und einen Teil der Sendung zu entfernen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="73" />
+        <source>Learn channel logos from my edits</source>
+        <translation>Senderlogos aus meinen Bearbeitungen lernen</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="78" />
+        <source>After you correct a detection and save the project, Chalkline remembers what that channel&apos;s logo looks like and finds the breaks better on the next recording from it. It only ever learns from a project you have edited yourself, never from its own unattended results.</source>
+        <translation>Wenn Sie eine Erkennung korrigieren und das Projekt speichern, merkt sich Chalkline, wie das Logo dieses Senders aussieht, und findet die Unterbrechungen bei der nächsten Aufnahme dieses Senders besser. Gelernt wird ausschließlich aus einem Projekt, das Sie selbst bearbeitet haben, niemals aus den eigenen unbeaufsichtigten Ergebnissen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="85" />
+        <source>Remembered logos…</source>
+        <translation>Gemerkte Logos…</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="94" />
+        <source>See what Chalkline has learned, pair a channel name with the service number the other recorder gives it, or forget a logo so it is learned afresh.</source>
+        <translation>Sehen Sie, was Chalkline gelernt hat, verknüpfen Sie einen Sendernamen mit der Dienstnummer, die das andere Aufnahmegerät ihm gibt, oder verwerfen Sie ein Logo, damit es neu gelernt wird.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="101" />
+        <source>Comskip</source>
+        <translation>Comskip</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="121" />
+        <source>Comskip is a separate program you install yourself. The .ini is optional - leave it blank to use Comskip&apos;s built-in defaults.</source>
+        <translation>Comskip ist ein eigenständiges Programm, das Sie selbst installieren. Die .ini-Datei ist optional – lassen Sie das Feld leer, um die integrierten Standardwerte von Comskip zu verwenden.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="126" />
+        <source>Pick the .ini by channel name in the filename</source>
+        <translation>Die .ini-Datei anhand des Sendernamens im Dateinamen auswählen</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="133" />
+        <source>For recorders that write the channel into the filename (e.g. Tvheadend). Put per-channel files named Comskip_&lt;channel&gt;.ini in the same folder as the .ini above. See the user guide for details.</source>
+        <translation>Für Aufnahmegeräte, die den Sender in den Dateinamen schreiben (z. B. Tvheadend). Legen Sie senderspezifische Dateien mit dem Namen Comskip_&lt;Sender&gt;.ini in denselben Ordner wie die obige .ini-Datei. Weitere Details finden Sie im Benutzerhandbuch.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="106" />
+        <source>Comskip program:</source>
+        <translation>Comskip-Programm:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="108" />
+        <source>(path to the comskip executable)</source>
+        <translation>(Pfad zur ausführbaren Comskip-Datei)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="114" />
+        <source>Comskip .ini:</source>
+        <translation>Comskip-.ini:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="116" />
+        <source>(optional: path to comskip.ini)</source>
+        <translation>(optional: Pfad zur comskip.ini)</translation>
+    </message>
+</context>
+<context>
     <name>BatchManager</name>
     <message>
         <location filename="../ui/batch_manager.py" line="42" />
@@ -236,7 +324,7 @@
     <message>
         <location filename="../ui/batch_manager.py" line="177" />
         <source>Move this job to the back of the queue. Useful when a job was held or failed, the batch has moved past it, and you've since fixed it - sending it to the end puts it back in this run rather than waiting for the queue to finish.</source>
-        <translation>Verschiebt diesen Auftrag ans Ende der Warteschlange. Praktisch, wenn ein Auftrag zurückgestellt wurde oder fehlgeschlagen ist, der Stapel bereits daran vorbei ist und du ihn inzwischen behoben hast – ans Ende verschoben kommt er noch in diesem Durchlauf an die Reihe, statt auf das Ende der Warteschlange zu warten.</translation>
+        <translation>Verschiebt diesen Auftrag ans Ende der Warteschlange. Praktisch, wenn ein Auftrag zurückgestellt wurde oder fehlgeschlagen ist, der Stapel bereits daran vorbei ist und Sie ihn inzwischen behoben haben – ans Ende verschoben kommt er noch in diesem Durchlauf an die Reihe, statt auf das Ende der Warteschlange zu warten.</translation>
     </message>
     <message>
         <location filename="../ui/batch_manager.py" line="187" />
@@ -488,6 +576,43 @@ Stoppen?</translation>
         <source>Batch finished</source>
         <translation>Stapelverarbeitung abgeschlossen</translation>
     </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="712" />
+        <source>The project file no longer exists:
+
+%s</source>
+        <translation>Die Projektdatei existiert nicht mehr:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="941" />
+        <source>%(summary)s
+
+%(held)d file(s) need repairing before they can be cut. Click Edit on each to run Quick Stream Fix and confirm the cut points, then run the batch again.</source>
+        <translation>%(summary)s
+
+%(held)d Datei(en) müssen repariert werden, bevor sie geschnitten werden können. Klicken Sie bei jeder auf Bearbeiten, um die Schnelle Stream-Reparatur auszuführen und die Schnittpunkte zu bestätigen, und starten Sie den Stapel dann erneut.</translation>
+    </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="950" />
+        <source>%s
+
+See the Status column for what went wrong with the failed jobs.</source>
+        <translation>%s
+
+In der Spalte „Status“ steht, was bei den fehlgeschlagenen Aufträgen schiefgegangen ist.</translation>
+    </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="789" />
+        <source>%d job(s) are waiting for review. Click Edit on each to repair and confirm the cuts, then run the batch again.</source>
+        <translation>%d Auftrag/Aufträge warten auf Ihre Prüfung. Klicken Sie bei jedem auf Bearbeiten, um zu reparieren und die Schnitte zu bestätigen, und starten Sie den Stapel dann erneut.</translation>
+    </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="852" />
+        <source>Processing %(index)d of %(total)d: %(name)s</source>
+        <translation>%(index)d von %(total)d wird verarbeitet: %(name)s</translation>
+    </message>
 </context>
 <context>
     <name>Comskip</name>
@@ -553,6 +678,21 @@ Stoppen?</translation>
         <location filename="../ui/config_editor.py" line="165" />
         <source>The configuration has been saved and will be applied now.</source>
         <translation>Die Konfiguration wurde gespeichert und wird jetzt übernommen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/config_editor.py" line="93" />
+        <source>Could not read the file: %s</source>
+        <translation>Die Datei konnte nicht gelesen werden: %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/config_editor.py" line="103" />
+        <source>Not valid JSON (line %(line)d, column %(col)d): %(msg)s. Nothing was saved.</source>
+        <translation>Kein gültiges JSON (Zeile %(line)d, Spalte %(col)d): %(msg)s. Es wurde nichts gespeichert.</translation>
+    </message>
+    <message>
+        <location filename="../ui/config_editor.py" line="161" />
+        <source>Could not save: %s</source>
+        <translation>Speichern nicht möglich: %s</translation>
     </message>
 </context>
 <context>
@@ -654,6 +794,16 @@ Stoppen?</translation>
         <source>Estimated time remaining: done</source>
         <translation>Geschätzte Restzeit: fertig</translation>
     </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="205" />
+        <source>Scene %(scene)d of %(total)d</source>
+        <translation>Szene %(scene)d von %(total)d</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="211" />
+        <source>Estimated time remaining: %s</source>
+        <translation>Geschätzte Restzeit: %s</translation>
+    </message>
 </context>
 <context>
     <name>FileRow</name>
@@ -698,7 +848,7 @@ Stoppen?</translation>
     <message>
         <location filename="../ui/settings_pages/files.py" line="72" />
         <source>Folders offered under the Folders button when saving a video, for keeping different series on different drives. Drag to reorder.</source>
-        <translation>Ordner, die beim Speichern eines Videos unter der Schaltfläche „Ordner“ angeboten werden – praktisch, wenn du verschiedene Serien auf verschiedenen Laufwerken ablegst. Zum Umsortieren ziehen.</translation>
+        <translation>Ordner, die beim Speichern eines Videos unter der Schaltfläche „Ordner“ angeboten werden – praktisch, wenn Sie verschiedene Serien auf verschiedenen Laufwerken ablegen. Zum Umsortieren ziehen.</translation>
     </message>
     <message>
         <location filename="../ui/settings_pages/files.py" line="88" />
@@ -714,6 +864,21 @@ Stoppen?</translation>
         <location filename="../ui/settings_pages/files.py" line="99" />
         <source>Add a favourite folder</source>
         <translation>Favoriten-Ordner hinzufügen</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="48" />
+        <source>Opening videos:</source>
+        <translation>Videos öffnen:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="55" />
+        <source>Saving videos:</source>
+        <translation>Videos speichern:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="62" />
+        <source>Project files:</source>
+        <translation>Projektdateien:</translation>
     </message>
 </context>
 <context>
@@ -964,6 +1129,35 @@ Stoppen?</translation>
         <location filename="../ui/film_renamer_dialog.py" line="874" />
         <source>Nothing is ticked to rename.</source>
         <translation>Es ist nichts zum Umbenennen ausgewählt.</translation>
+    </message>
+    <message>
+        <location filename="../ui/film_renamer_dialog.py" line="621" />
+        <source>Delete the preset &apos;%s&apos;?</source>
+        <translation>Die Voreinstellung „%s“ löschen?</translation>
+    </message>
+    <message>
+        <location filename="../ui/film_renamer_dialog.py" line="850" />
+        <source>%(ready)d ready · %(done)d done · %(total)d total</source>
+        <translation>%(ready)d bereit · %(done)d erledigt · %(total)d gesamt</translation>
+    </message>
+    <message>
+        <location filename="../ui/film_renamer_dialog.py" line="904" />
+        <source>Renamed %d film(s).%s%s</source>
+        <translation>%d Film(e) umbenannt.%s%s</translation>
+    </message>
+    <message>
+        <location filename="../ui/film_renamer_dialog.py" line="907" />
+        <source>
+Skipped %d (target already exists).</source>
+        <translation>
+%d übersprungen (Ziel existiert bereits).</translation>
+    </message>
+    <message>
+        <location filename="../ui/film_renamer_dialog.py" line="909" />
+        <source>
+Failed %d.</source>
+        <translation>
+%d fehlgeschlagen.</translation>
     </message>
 </context>
 <context>
@@ -1544,6 +1738,129 @@ Ja = anhängen,  Nein = aktuelle Liste ersetzen.</translation>
         <source>Record extra-detailed export diagnostics (including the cutter's own output) to the log. Useful for chasing problems; off by default to keep logs readable.</source>
         <translation type="vanished">Zeichnet besonders detaillierte Exportdiagnosen (einschließlich der eigenen Ausgabe des Cutters) im Protokoll auf. Nützlich zur Fehlersuche; standardmäßig deaktiviert, um die Protokolle lesbar zu halten.</translation>
     </message>
+    <message>
+        <location filename="../ui/settings_pages/logs.py" line="18" />
+        <source>Log files:</source>
+        <translation>Protokolldateien:</translation>
+    </message>
+</context>
+<context>
+    <name>LogoStoreDialog</name>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="145" />
+        <location filename="../ui/logo_store_dialog.py" line="416" />
+        <location filename="../ui/logo_store_dialog.py" line="486" />
+        <location filename="../ui/logo_store_dialog.py" line="545" />
+        <source>Remembered logos</source>
+        <translation>Gemerkte Logos</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="162" />
+        <source>Chalkline learns each channel&apos;s logo when you correct a detection and save the project. A recorder that keeps the channel name gives a name here; one that keeps the service number gives a number. They are the same channel, but Snipwright cannot tell - fill in the missing half of a row and the logo will be used for recordings from both.</source>
+        <translation>Chalkline lernt das Logo eines Senders, wenn Sie eine Erkennung korrigieren und das Projekt speichern. Ein Aufnahmegerät, das den Sendernamen speichert, liefert hier einen Namen; eines, das die Dienstnummer speichert, liefert eine Nummer. Es ist derselbe Sender, doch Snipwright kann das nicht erkennen – ergänzen Sie die fehlende Hälfte einer Zeile, und das Logo wird für Aufnahmen aus beiden Quellen verwendet.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="176" />
+        <source>Logo</source>
+        <translation>Logo</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="176" />
+        <source>Channel</source>
+        <translation>Sender</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="176" />
+        <source>Service ID</source>
+        <translation>Dienst-ID</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="177" />
+        <source>Mask</source>
+        <translation>Maske</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="177" />
+        <source>Contrast</source>
+        <translation>Kontrast</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="191" />
+        <source>Forget</source>
+        <translation>Verwerfen</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="267" />
+        <source>Chalkline learned a logo while this window was open, and it has been added to the list: %s</source>
+        <translation>Chalkline hat ein Logo gelernt, während dieses Fenster geöffnet war; es wurde der Liste hinzugefügt: %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="298" />
+        <source>%(count)dpx %(kind)s</source>
+        <translation>%(count)dpx %(kind)s</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="312" />
+        <source>Nothing learned yet. Correct a detection and save the project, and the channel&apos;s logo will appear here.</source>
+        <translation>Noch nichts gelernt. Korrigieren Sie eine Erkennung und speichern Sie das Projekt, dann erscheint das Logo des Senders hier.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="384" />
+        <source>A logo needs at least one of Channel or Service ID. Use Forget to remove it entirely.</source>
+        <translation>Ein Logo braucht mindestens einen Eintrag unter Sender oder Dienst-ID. Verwenden Sie „Verwerfen“, um es vollständig zu entfernen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="418" />
+        <source>“%s” already has a logo of its own. Joining them keeps the clearer of the two masks and uses it for both names.
+
+Join them?</source>
+        <translation>„%s“ hat bereits ein eigenes Logo. Beim Zusammenführen wird die deutlichere der beiden Masken behalten und für beide Namen verwendet.
+
+Zusammenführen?</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="456" />
+        <source>The entries could not be joined - the list had changed. Try again.</source>
+        <translation>Die Einträge konnten nicht zusammengeführt werden – die Liste hatte sich geändert. Versuchen Sie es erneut.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="474" />
+        <source>Joined into one entry, keeping the %(keep)dpx mask (contrast %(kc).2f) over the %(drop)dpx one (contrast %(dc).2f).</source>
+        <translation>Zu einem Eintrag zusammengeführt; die %(keep)dpx-Maske (Kontrast %(kc).2f) wurde gegenüber der %(drop)dpx-Maske (Kontrast %(dc).2f) behalten.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="495" />
+        <source>this channel</source>
+        <translation>dieser Sender</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="498" />
+        <source>Forget logo</source>
+        <translation>Logo verwerfen</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="500" />
+        <source>Forget the logo remembered for “%s”?
+
+Chalkline will learn it again the next time you correct a detection for that channel and save the project.</source>
+        <translation>Das für „%s“ gemerkte Logo verwerfen?
+
+Chalkline lernt es erneut, sobald Sie das nächste Mal eine Erkennung für diesen Sender korrigieren und das Projekt speichern.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="511" />
+        <source>Forgotten: %s</source>
+        <translation>Verworfen: %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="546" />
+        <source>The logo list could not be saved:
+
+%s</source>
+        <translation>Die Logo-Liste konnte nicht gespeichert werden:
+
+%s</translation>
+    </message>
 </context>
 <context>
     <name>MainWindow</name>
@@ -1811,7 +2128,7 @@ Das liegt meist am Netzwerk und nicht an Snipwright.</translation>
     <message>
         <location filename="../main.py" line="1216" />
         <source>You're running the latest version (%s).</source>
-        <translation>Du verwendest bereits die neueste Version (%s).</translation>
+        <translation>Sie verwenden bereits die neueste Version (%s).</translation>
     </message>
     <message>
         <location filename="../main.py" line="1225" />
@@ -1821,12 +2138,12 @@ Das liegt meist am Netzwerk und nicht an Snipwright.</translation>
     <message>
         <location filename="../main.py" line="1226" />
         <source>Snipwright %s is available. You have %s.</source>
-        <translation>Snipwright %s ist verfügbar. Du hast %s.</translation>
+        <translation>Snipwright %s ist verfügbar. Sie haben %s.</translation>
     </message>
     <message>
         <location filename="../main.py" line="1229" />
         <source>Snipwright doesn't update itself - open the releases page to download it, then extract over your existing folder.</source>
-        <translation>Snipwright aktualisiert sich nicht selbst – öffne die Releases-Seite, lade die neue Version herunter und entpacke sie über deinen vorhandenen Ordner.</translation>
+        <translation>Snipwright aktualisiert sich nicht selbst – öffnen Sie die Releases-Seite, laden Sie die neue Version herunter und entpacken Sie sie über Ihren vorhandenen Ordner.</translation>
     </message>
     <message>
         <location filename="../main.py" line="1232" />
@@ -1946,7 +2263,7 @@ Fortfahren?</translation>
     <message>
         <location filename="../main.py" line="4914" />
         <source>Settings brought across from your previous installation.</source>
-        <translation>Einstellungen aus deiner vorherigen Installation übernommen.</translation>
+        <translation>Einstellungen aus Ihrer vorherigen Installation übernommen.</translation>
     </message>
     <message>
         <location filename="../main.py" line="4917" />
@@ -2505,7 +2822,190 @@ Quit anyway?</source>
 
 Trotzdem beenden?</translation>
     </message>
-<message><source>Loaded %s chapter mark(s) from the file.</source><translation>%s Kapitelmarke(n) aus der Datei geladen.</translation></message><message><source>Detecting commercials (Comskip) - pass %s…</source><translation>Werbung wird erkannt (Comskip) – Durchlauf %s…</translation></message></context>
+    <message>
+        <source>Loaded %s chapter mark(s) from the file.</source>
+        <translation>%s Kapitelmarke(n) aus der Datei geladen.</translation>
+    </message>
+    <message>
+        <source>Detecting commercials (Comskip) - pass %s…</source>
+        <translation>Werbung wird erkannt (Comskip) – Durchlauf %s…</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1520" />
+        <source>Added %(count)d scene(s) from %(name)s (%(total)d in joiner list).</source>
+        <translation>%(count)d Szene(n) aus %(name)s hinzugefügt (%(total)d in der Joiner-Liste).</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1681" />
+        <source>Joined video created: %s</source>
+        <translation>Zusammengefügtes Video erstellt: %s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1842" />
+        <source>The Comskip program hasn&apos;t been set yet.
+
+Add the path to Comskip (and optionally its .ini file) in Tools &gt; Settings &gt; Advert detection, or switch to Chalkline there - it is built in and needs no setup.</source>
+        <translation>Das Comskip-Programm wurde noch nicht festgelegt.
+
+Fügen Sie den Pfad zu Comskip (und optional der zugehörigen .ini-Datei) unter Werkzeuge &gt; Einstellungen &gt; Werbeerkennung hinzu, oder wechseln Sie dort zu Chalkline – es ist integriert und muss nicht eingerichtet werden.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1863" />
+        <source>This will replace your current scene markers with the detected scenes. Continue?</source>
+        <translation>Dies ersetzt Ihre aktuellen Szenenmarker durch die erkannten Szenen. Fortfahren?</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1872" />
+        <source>Detecting commercials (%s)…</source>
+        <translation>Werbung wird erkannt (%s)…</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1887" />
+        <location filename="../main.py" line="1908" />
+        <source>Detecting commercials (%s) - pass %s…</source>
+        <translation>Werbung wird erkannt (%s) – Durchlauf %s…</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1924" />
+        <source>%s finished but its output could not be read:
+
+%s</source>
+        <translation>%s wurde beendet, aber die Ausgabe konnte nicht gelesen werden:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1940" />
+        <source>%s found no commercials to remove (the whole file is one scene).</source>
+        <translation>%s hat keine zu entfernende Werbung gefunden (die gesamte Datei ist eine einzige Szene).</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1953" />
+        <source>%(detector)s found %(count)d scene(s).</source>
+        <translation>%(detector)s hat %(count)d Szene(n) gefunden.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2026" />
+        <source>This EDL could not be read:
+
+%s</source>
+        <translation>Diese EDL konnte nicht gelesen werden:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2034" />
+        <source>This EDL contains no cut regions, so there is nothing to apply.</source>
+        <translation>Diese EDL enthält keine Schnittbereiche, es gibt also nichts anzuwenden.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2049" />
+        <source>An EDL contains only a cut list, not a video.
+It has to be applied to a recording that is already open.
+
+EDL: %s
+
+Do you wish to select the video it applies to?</source>
+        <translation>Eine EDL enthält nur eine Schnittliste, kein Video.
+Sie muss auf eine bereits geöffnete Aufnahme angewendet werden.
+
+EDL: %s
+
+Möchten Sie das Video auswählen, für das sie gilt?</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2070" />
+        <source>Locate video for EDL</source>
+        <translation>Video für die EDL suchen</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2103" />
+        <source>This EDL runs %(over)s seconds past the end of the video.
+
+It was probably made from a different recording. Apply it anyway?</source>
+        <translation>Diese EDL reicht %(over)s Sekunden über das Ende des Videos hinaus.
+
+Sie stammt wahrscheinlich von einer anderen Aufnahme. Trotzdem anwenden?</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2119" />
+        <source>This EDL could not be applied:
+
+%s</source>
+        <translation>Diese EDL konnte nicht angewendet werden:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2127" />
+        <source>This EDL removes the whole recording, so there would be nothing left to keep.</source>
+        <translation>Diese EDL entfernt die gesamte Aufnahme, es bliebe also nichts übrig.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2143" />
+        <source>EDL loaded: %(name)s - %(cuts)d cut regions to %(last).1fs of a %(duration).1fs video</source>
+        <translation>EDL geladen: %(name)s – %(cuts)d Schnittbereiche bis %(last).1fs eines %(duration).1fs langen Videos</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2241" />
+        <source>Project loaded: %s</source>
+        <translation>Projekt geladen: %s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2310" />
+        <location filename="../main.py" line="2350" />
+        <source>Project saved: %s</source>
+        <translation>Projekt gespeichert: %s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2449" />
+        <source>Project saved. Chalkline is learning %s&apos;s logo in the background - this takes a few minutes.</source>
+        <translation>Projekt gespeichert. Chalkline lernt im Hintergrund das Logo von %s – das dauert einige Minuten.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2480" />
+        <source>Chalkline learned %s&apos;s logo from your edit - detection on this channel should improve.</source>
+        <translation>Chalkline hat das Logo von %s aus Ihrer Bearbeitung gelernt – die Erkennung bei diesem Sender sollte sich verbessern.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2557" />
+        <source>An EDL stores cut times only, so the %(count)s marker(s) in this project will not be saved.
+
+Continue?</source>
+        <translation>Eine EDL speichert nur Schnittzeiten, daher werden die %(count)s Marker in diesem Projekt nicht gespeichert.
+
+Fortfahren?</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2573" />
+        <source>The EDL could not be written:
+
+%s</source>
+        <translation>Die EDL konnte nicht geschrieben werden:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="2578" />
+        <source>EDL saved: %s</source>
+        <translation>EDL gespeichert: %s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="3099" />
+        <source>Added %(count)d file(s) to the joiner list (%(total)d entries).</source>
+        <translation>%(count)d Datei(en) zur Joiner-Liste hinzugefügt (%(total)d Einträge).</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="3846" />
+        <source>Queued to batch: %(name)s (%(profile)s). Open Tools → Batch Manager to run it.</source>
+        <translation>Zur Stapelverarbeitung eingereiht: %(name)s (%(profile)s). Öffnen Sie Werkzeuge → Stapelverwaltung, um sie auszuführen.</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="4861" />
+        <source>Could not open video: %s</source>
+        <translation>Video konnte nicht geöffnet werden: %s</translation>
+    </message>
+</context>
 <context>
     <name>MaintenancePage</name>
     <message>
@@ -2603,7 +3103,7 @@ Trotzdem beenden?</translation>
     <message>
         <location filename="../ui/settings_pages/maintenance.py" line="120" />
         <source>Asks GitHub whether a newer Snipwright has been released and tells you if there is one. Nothing is downloaded or installed - only the public list of releases is read. Set to Never to disable automatic checks; a manual check can always be made with the Check now button.</source>
-        <translation>Fragt bei GitHub nach, ob eine neuere Version von Snipwright veröffentlicht wurde, und weist dich darauf hin. Es wird nichts heruntergeladen oder installiert – gelesen wird nur die öffentliche Releases-Liste. Stelle auf „Nie“, um die automatische Prüfung abzuschalten; eine manuelle Prüfung ist jederzeit über die Schaltfläche „Jetzt prüfen“ möglich.</translation>
+        <translation>Fragt bei GitHub nach, ob eine neuere Version von Snipwright veröffentlicht wurde, und weist Sie darauf hin. Es wird nichts heruntergeladen oder installiert – gelesen wird nur die öffentliche Releases-Liste. Stellen Sie auf „Nie“, um die automatische Prüfung abzuschalten; eine manuelle Prüfung ist jederzeit über die Schaltfläche „Jetzt prüfen“ möglich.</translation>
     </message>
     <message>
         <location filename="../ui/settings_pages/maintenance.py" line="141" />
@@ -2670,6 +3170,21 @@ Was noch in Gebrauch ist, wird übersprungen – im Editor geöffnet, gerade exp
         <location filename="../ui/settings_pages/maintenance.py" line="230" />
         <source>Deleted %d file(s), freeing %s.</source>
         <translation>%d Datei(en) gelöscht, %s freigegeben.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/maintenance.py" line="142" />
+        <source>Working copy folder</source>
+        <translation>Ordner für Arbeitskopien</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/maintenance.py" line="148" />
+        <source>Leave blank to use the system temporary folder, shown above as the placeholder. A working copy is roughly the size of the recording it was made from, so somewhere with room for several of them is worth choosing - on Windows the system folder is on the system drive, which is usually the smallest. If the folder set here goes missing or cannot be written to, the system folder is used instead.</source>
+        <translation>Leer lassen, um den temporären Systemordner zu verwenden, der oben als Platzhalter angezeigt wird. Eine Arbeitskopie ist etwa so groß wie die Aufnahme, aus der sie entstanden ist; es lohnt sich also, einen Ort mit Platz für mehrere davon zu wählen – unter Windows liegt der Systemordner auf dem Systemlaufwerk, das meist das kleinste ist. Fehlt der hier eingestellte Ordner oder kann nicht in ihn geschrieben werden, wird stattdessen der Systemordner verwendet.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/maintenance.py" line="170" />
+        <source>Repairing a recording with Quick Stream Fix writes a working copy to the folder above, and the editor cuts that copy. They are kept so you can come back to a recording later, and deleted once they reach the age below.</source>
+        <translation>Beim Reparieren einer Aufnahme mit der Schnellen Stream-Reparatur wird eine Arbeitskopie im obigen Ordner angelegt, die der Editor dann schneidet. Sie bleiben erhalten, damit Sie später an einer Aufnahme weiterarbeiten können, und werden gelöscht, sobald sie das unten angegebene Alter erreichen.</translation>
     </message>
 </context>
 <context>
@@ -3106,6 +3621,11 @@ Trotzdem verwenden?</translation>
         <location filename="../addons/output_profiles.py" line="190" />
         <source>Smart</source>
         <translation>Intelligent</translation>
+    </message>
+    <message>
+        <location filename="../ui/profile_manager_dialog.py" line="72" />
+        <source>No audio (silent)</source>
+        <translation>Kein Ton (stumm)</translation>
     </message>
 </context>
 <context>
@@ -3776,6 +4296,40 @@ Trotzdem verwenden?</translation>
         <source>Nothing is ticked to rename.</source>
         <translation>Es wurde nichts zum Umbenennen ausgewählt.</translation>
     </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="631" />
+        <source>Delete the preset &apos;%s&apos;?</source>
+        <translation>Die Voreinstellung „%s“ löschen?</translation>
+    </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="762" />
+        <source>%d file(s) loaded.</source>
+        <translation>%d Datei(en) geladen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="1358" />
+        <source>%(ready)d ready · %(done)d done · %(total)d total   —   double-click a row to change its show.</source>
+        <translation>%(ready)d bereit · %(done)d erledigt · %(total)d gesamt   —   Doppelklicken Sie auf eine Zeile, um ihre Sendung zu ändern.</translation>
+    </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="1414" />
+        <source>Renamed %d file(s).%s%s</source>
+        <translation>%d Datei(en) umbenannt.%s%s</translation>
+    </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="1417" />
+        <source>
+Skipped %d (target already exists).</source>
+        <translation>
+%d übersprungen (Ziel existiert bereits).</translation>
+    </message>
+    <message>
+        <location filename="../ui/renamer_dialog.py" line="1419" />
+        <source>
+Failed %d.</source>
+        <translation>
+%d fehlgeschlagen.</translation>
+    </message>
 </context>
 <context>
     <name>SaveVideoDialog</name>
@@ -3801,7 +4355,7 @@ Trotzdem verwenden?</translation>
     <message>
         <location filename="../ui/save_video_dialog.py" line="82" />
         <source>Send this export to one of your favourite folders.&lt;br&gt;Set them up under Settings → Files &amp; folders.</source>
-        <translation>Speichert diesen Export in einem deiner Favoriten-Ordner.&lt;br&gt;Einrichten unter Einstellungen → Dateien &amp; Ordner.</translation>
+        <translation>Speichert diesen Export in einem Ihrer Favoriten-Ordner.&lt;br&gt;Einrichten unter Einstellungen → Dateien &amp; Ordner.</translation>
     </message>
     <message>
         <location filename="../ui/save_video_dialog.py" line="90" />
@@ -3869,6 +4423,20 @@ Trotzdem verwenden?</translation>
         <location filename="../ui/save_video_dialog.py" line="364" />
         <source>Please choose an output file.</source>
         <translation>Bitte wählen Sie eine Ausgabedatei.</translation>
+    </message>
+    <message>
+        <location filename="../ui/save_video_dialog.py" line="192" />
+        <source>%s  —  edited for this export</source>
+        <translation>%s  —  für diesen Export bearbeitet</translation>
+    </message>
+    <message>
+        <location filename="../ui/save_video_dialog.py" line="376" />
+        <source>%s already exists.
+
+Overwrite it?</source>
+        <translation>%s existiert bereits.
+
+Überschreiben?</translation>
     </message>
 </context>
 <context>
@@ -3974,6 +4542,11 @@ Trotzdem verwenden?</translation>
         <location filename="../ui/settings_pages/tools.py" line="13" />
         <source>External tools</source>
         <translation>Externe Werkzeuge</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/ad_detection.py" line="33" />
+        <source>Advert detection</source>
+        <translation>Werbeerkennung</translation>
     </message>
 </context>
 <context>
@@ -4127,6 +4700,36 @@ Ihre Aufnahmen und Projekte sind davon nicht betroffen. Fortfahren?</translation
         <location filename="../ui/settings_pages/tools.py" line="112" />
         <source>Used by the TV and Film renamers (Extras menu) to look up titles. A free key is available from your TMDB account.</source>
         <translation>Wird von den TV- und Film-Umbenennern (Menü Extras) verwendet, um Titel nachzuschlagen. Ein kostenloser Schlüssel ist über Ihr TMDB-Konto erhältlich.</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="31" />
+        <source>mkvmerge program:</source>
+        <translation>mkvmerge-Programm:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="33" />
+        <source>(path to mkvmerge - install mkvtoolnix; auto-detected if on PATH)</source>
+        <translation>(Pfad zu mkvmerge – mkvtoolnix installieren; wird im PATH automatisch erkannt)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="48" />
+        <source>ffmpeg program:</source>
+        <translation>ffmpeg-Programm:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="50" />
+        <source>(path to ffmpeg - auto-detected if on PATH)</source>
+        <translation>(Pfad zu ffmpeg – wird im PATH automatisch erkannt)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="59" />
+        <source>ffprobe program:</source>
+        <translation>ffprobe-Programm:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/tools.py" line="61" />
+        <source>(path to ffprobe - auto-detected if on PATH)</source>
+        <translation>(Pfad zu ffprobe – wird im PATH automatisch erkannt)</translation>
     </message>
 </context>
 <context>
@@ -4345,6 +4948,26 @@ Trotzdem fortfahren?</translation>
         <translation>Kopieren fehlgeschlagen:
 
 %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/trim_copy_dialog.py" line="387" />
+        <source>%s already exists.
+
+Overwrite it?</source>
+        <translation>%s existiert bereits.
+
+Überschreiben?</translation>
+    </message>
+    <message>
+        <location filename="../ui/trim_copy_dialog.py" line="419" />
+        <source>Copy complete.
+
+%(path)s
+%(size)s written.</source>
+        <translation>Kopieren abgeschlossen.
+
+%(path)s
+%(size)s geschrieben.</translation>
     </message>
 </context>
 <context>
@@ -4567,6 +5190,16 @@ Ini: %s</translation>
         <source>Settings saved.</source>
         <translation>Einstellungen gespeichert.</translation>
     </message>
+    <message>
+        <location filename="../watch/tray.py" line="644" />
+        <source>Detector: Chalkline (built in - nothing to set up). Change it in the Snipwright editor → Settings → Advert detection.</source>
+        <translation>Detektor: Chalkline (integriert – nichts einzurichten). Ändern lässt sich das im Snipwright-Editor → Einstellungen → Werbeerkennung.</translation>
+    </message>
+    <message>
+        <location filename="../watch/tray.py" line="660" />
+        <source>⚠ Comskip isn&apos;t set. Open the Snipwright editor → Settings and set the Comskip program (and .ini), or switch to Chalkline there - it is built in and needs no setup. The watcher reads the choice from there.</source>
+        <translation>⚠ Comskip ist nicht festgelegt. Öffnen Sie den Snipwright-Editor → Einstellungen und legen Sie das Comskip-Programm (und die .ini) fest, oder wechseln Sie dort zu Chalkline – es ist integriert und muss nicht eingerichtet werden. Der Watcher übernimmt die Wahl von dort.</translation>
+    </message>
 </context>
 <context>
     <name>WatcherTray</name>
@@ -4709,6 +5342,11 @@ Ini: %s</translation>
 %s</source>
         <translation>Snipwright Watcher
 %s</translation>
+    </message>
+    <message>
+        <location filename="../watch/tray.py" line="820" />
+        <source>Comskip isn&apos;t set - open Settings and configure it in the editor first, or switch to Chalkline there.</source>
+        <translation>Comskip ist nicht festgelegt – öffnen Sie die Einstellungen und konfigurieren Sie es zuerst im Editor, oder wechseln Sie dort zu Chalkline.</translation>
     </message>
 </context>
 </TS>

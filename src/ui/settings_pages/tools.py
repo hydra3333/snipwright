@@ -1,8 +1,13 @@
-"""External tools page: the helper programs and API keys Snipwright relies on."""
+"""External tools page: the helper programs and API keys Snipwright relies on.
+
+Comskip used to live here.  It moved to the Advert detection page, alongside
+the choice between it and Chalkline - grouped by what the settings are for
+rather than by the fact that one of them happens to be a separate program.
+"""
 
 import shutil
 
-from PySide6.QtWidgets import QLabel, QLineEdit, QCheckBox
+from PySide6.QtWidgets import QLabel, QLineEdit
 
 from ui.settings_pages import SettingsPage
 from ui.settings_widgets import FileRow, hint
@@ -16,39 +21,6 @@ class ToolsPage(SettingsPage):
         s = self._settings()
         p = self._paths()
 
-        self._comskip_bin_row = FileRow(
-            "Comskip program:",
-            p.get("comskip_binary", ""),
-            "(path to the comskip executable)",
-            "All files (*)",
-        )
-        self.add(self._comskip_bin_row)
-
-        self._comskip_ini_row = FileRow(
-            "Comskip .ini:",
-            p.get("comskip_ini", ""),
-            "(optional: path to comskip.ini)",
-            "INI files (*.ini);;All files (*)",
-        )
-        self.add(self._comskip_ini_row)
-        self.add(hint(
-            self.tr("Comskip detects the commercial breaks for the Watcher. The .ini "
-            "is optional - leave it blank to use Comskip's built-in defaults.")
-        ))
-
-        self._comskip_by_channel = QCheckBox(
-            self.tr("Pick the .ini by channel name in the filename")
-        )
-        self._comskip_by_channel.setChecked(
-            bool(p.get("comskip_ini_by_channel", False))
-        )
-        self.add(self._comskip_by_channel)
-        self.add(hint(
-            self.tr("For recorders that write the channel into the filename (e.g. "
-            "Tvheadend). Put per-channel files named Comskip_<channel>.ini in "
-            "the same folder as the .ini above. See the user guide for details.")
-        ))
-
         # mkvmerge (mkvtoolnix): used for lossless MKV exports.  If the user
         # hasn't set a path, auto-fill the field with whatever's detected on
         # PATH so it's ready to save without browsing.
@@ -56,9 +28,9 @@ class ToolsPage(SettingsPage):
             shutil.which("mkvmerge") or ""
         )
         self._mkvmerge_row = FileRow(
-            "mkvmerge program:",
+            self.tr("mkvmerge program:"),
             mkvmerge_value,
-            "(path to mkvmerge - install mkvtoolnix; auto-detected if on PATH)",
+            self.tr("(path to mkvmerge - install mkvtoolnix; auto-detected if on PATH)"),
             "All files (*)",
         )
         self.add(self._mkvmerge_row)
@@ -73,9 +45,9 @@ class ToolsPage(SettingsPage):
             shutil.which("ffmpeg") or ""
         )
         self._ffmpeg_row = FileRow(
-            "ffmpeg program:",
+            self.tr("ffmpeg program:"),
             ffmpeg_value,
-            "(path to ffmpeg - auto-detected if on PATH)",
+            self.tr("(path to ffmpeg - auto-detected if on PATH)"),
             "All files (*)",
         )
         self.add(self._ffmpeg_row)
@@ -84,9 +56,9 @@ class ToolsPage(SettingsPage):
             shutil.which("ffprobe") or ""
         )
         self._ffprobe_row = FileRow(
-            "ffprobe program:",
+            self.tr("ffprobe program:"),
             ffprobe_value,
-            "(path to ffprobe - auto-detected if on PATH)",
+            self.tr("(path to ffprobe - auto-detected if on PATH)"),
             "All files (*)",
         )
         self.add(self._ffprobe_row)
@@ -118,9 +90,6 @@ class ToolsPage(SettingsPage):
         settings["tmdb_api_key"] = self._tmdb_key.text().strip()
 
         paths = config.setdefault("paths", {})
-        paths["comskip_binary"] = self._comskip_bin_row.value()
-        paths["comskip_ini"] = self._comskip_ini_row.value()
-        paths["comskip_ini_by_channel"] = self._comskip_by_channel.isChecked()
         paths["mkvmerge_binary"] = self._mkvmerge_row.value()
         paths["ffmpeg_binary"] = self._ffmpeg_row.value()
         paths["ffprobe_binary"] = self._ffprobe_row.value()

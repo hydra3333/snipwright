@@ -188,7 +188,8 @@ class SaveVideoDialog(QDialog):
         edited.enabled = base.enabled
         edited.builtin = False
         self._override_profile = edited
-        self.profile_field.setText("%s  \u2014  edited for this export" % edited.name)
+        self.profile_field.setText(
+            self.tr("%s  \u2014  edited for this export") % edited.name)
         self._apply_profile_path(edited)
 
     def _effective_profile(self):
@@ -372,7 +373,8 @@ class SaveVideoDialog(QDialog):
         if os.path.exists(path):
             if QMessageBox.question(
                 self, self.tr("Save Video"),
-                "%s already exists.\n\nOverwrite it?" % os.path.basename(path),
+                self.tr("%s already exists.\n\nOverwrite it?")
+                % os.path.basename(path),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             ) != QMessageBox.Yes:
                 return

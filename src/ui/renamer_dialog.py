@@ -627,7 +627,8 @@ class RenamerDialog(QDialog):
             return
         label = self.preset_combo.currentText()
         if QMessageBox.question(
-            self, self.tr("Delete preset"), "Delete the preset '%s'?" % label
+            self, self.tr("Delete preset"),
+            self.tr("Delete the preset '%s'?") % label
         ) != QMessageBox.Yes:
             return
         presets = [(l, p) for l, p in
@@ -757,7 +758,8 @@ class RenamerDialog(QDialog):
             # refresh/relaunch, not silently re-tick).
             r.checked = get_checked(self.config, "tv", r.path)
         if files:
-            self.source_label.setText("%d file(s) loaded." % len(files))
+            self.source_label.setText(
+                self.tr("%d file(s) loaded.") % len(files))
             guess = parse_filename(files[0]).show
             if guess and not self.query_edit.text().strip():
                 self.query_edit.setText(guess)
@@ -1353,9 +1355,10 @@ class RenamerDialog(QDialog):
         self.clear_btn.setEnabled(done > 0)
         self._update_example()
         self.status_label.setText(
-            "%d ready · %d done · %d total   —   "
-            "double-click a row to change its show."
-            % (ready, done, len(self.rows))
+            self.tr("%(ready)d ready \u00b7 %(done)d done \u00b7 "
+                    "%(total)d total   \u2014   "
+                    "double-click a row to change its show.")
+            % {"ready": ready, "done": done, "total": len(self.rows)}
         )
 
     # -- rename ------------------------------------------------------------
@@ -1408,11 +1411,12 @@ class RenamerDialog(QDialog):
             QMessageBox.information(
                 self,
                 self.tr("TV Renamer"),
-                "Renamed %d file(s).%s%s"
+                self.tr("Renamed %d file(s).%s%s")
                 % (
                     done,
-                    ("\nSkipped %d (target already exists)." % skipped) if skipped else "",
-                    ("\nFailed %d." % failed) if failed else "",
+                    (self.tr("\nSkipped %d (target already exists).")
+                     % skipped) if skipped else "",
+                    (self.tr("\nFailed %d.") % failed) if failed else "",
                 ),
             )
         self._fill_table()

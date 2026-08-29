@@ -15,6 +15,19 @@ env/
 *.swp
 .DS_Store
 
+# Claude context file (local only, not for GitHub)
+CLAUDE.md
+
+# The advert detector's own notes, split out of CLAUDE.md when it had grown
+# to 71% of it and was burying the sections meant to be read before every
+# change.  Same class as CLAUDE.md: internal working notes, not for GitHub.
+CHALKLINE.md
+
+# Working note for a job in progress — local only, and deleted once the work
+# it describes is finished.  Same class as CLAUDE.md: it records where a
+# half-done piece of work got to, which is nobody's business but this tree's.
+HANDOVER.md
+
 # Local config / logs (Snipwright stores these under ~/.config/snipwright)
 *.log
 

@@ -30,6 +30,30 @@ import xml.etree.ElementTree as ET
 
 TICKS_PER_SECOND = 10_000_000
 
+# The element carrying the name and version of whatever wrote the project.
+#
+# VideoReDo writes <VideoReDoVersion>; Snipwright now writes its own name
+# here instead.  The root element stays <VideoReDoProject> either way -
+# renaming that stops VideoReDo opening the file, since the root is what it
+# matches on, whereas a child tag it does not recognise is simply ignored.
+# Both are read, so nothing that was openable before has stopped being so.
+SNIPWRIGHT_VERSION_TAG = "SnipwrightVersion"
+LEGACY_VERSION_TAG = "VideoReDoVersion"
+
+
+def written_by(root):
+    """What wrote this project, as free text, or "" if it does not say.
+
+    Reads either version tag.  Nothing in Snipwright depends on the answer -
+    it is here so a project's origin can be reported rather than guessed at,
+    now that two different tags mean the same thing.
+    """
+    for tag in (SNIPWRIGHT_VERSION_TAG, LEGACY_VERSION_TAG):
+        node = root.find(tag)
+        if node is not None and (node.text or "").strip():
+            return node.text.strip()
+    return ""
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -228,7 +252,16 @@ def save_vprj(path, keep_ranges, markers, source_filename, index):
     root = ET.Element("VideoReDoProject", Version="5")
 
     from version import APP_NAME, VERSION, build_stamp
-    ver = ET.SubElement(root, "VideoReDoVersion", BuildNumber=str(build_stamp()))
+    # The root element keeps VideoReDo's name; the version tag does not.
+    #
+    # Tested directly: renaming the root element stops VideoReDo opening the
+    # file at all, because that is what it matches on.  Renaming this child
+    # does not - VideoReDo ignores a tag it does not recognise, and nothing
+    # here or in any Comskip-aware tool reads it either.  So a project
+    # Snipwright wrote now carries Snipwright's name, and still opens
+    # everywhere it used to.
+    ver = ET.SubElement(root, SNIPWRIGHT_VERSION_TAG,
+                        BuildNumber=str(build_stamp()))
     ver.text = f"{APP_NAME} {VERSION}"
 
     ET.SubElement(root, "Filename").text = source_filename or ""
@@ -307,7 +340,8 @@ def save_vprj_from_cuts(path, source_filename, cut_ranges_seconds,
     root = ET.Element("VideoReDoProject", Version="5")
 
     from version import APP_NAME, VERSION, build_stamp
-    ver = ET.SubElement(root, "VideoReDoVersion", BuildNumber=str(build_stamp()))
+    ver = ET.SubElement(root, SNIPWRIGHT_VERSION_TAG,
+                        BuildNumber=str(build_stamp()))
     ver.text = f"{APP_NAME} {VERSION}"
 
     ET.SubElement(root, "Filename").text = source_filename or ""

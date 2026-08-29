@@ -356,7 +356,7 @@ class BatchManagerDialog(QDialog):
             self,
             "Add Projects",
             self.controller.out_folder,
-            "VideoReDo Project (*.vprj *.VPRJ);;All files (*)",
+            "Snipwright Project (*.vprj *.VPrj *.VPRJ);;All files (*)",
         )
         if not paths:
             return
@@ -709,7 +709,8 @@ class BatchManagerDialog(QDialog):
         if not os.path.isfile(job.vprj_path):
             QMessageBox.warning(
                 self, self.tr("Edit"),
-                f"The project file no longer exists:\n\n{job.vprj_path}",
+                self.tr("The project file no longer exists:\n\n%s")
+                % job.vprj_path,
             )
             return
         was_held = job.status == NEEDS_REVIEW
@@ -785,8 +786,9 @@ class BatchManagerDialog(QDialog):
             if held:
                 QMessageBox.information(
                     self, self.tr("Batch Manager"),
-                    f"{held} job(s) are waiting for review. Click Edit on each "
-                    "to repair and confirm the cuts, then run the batch again.",
+                    self.tr("%d job(s) are waiting for review. Click Edit on "
+                            "each to repair and confirm the cuts, then run "
+                            "the batch again.") % held,
                 )
             else:
                 QMessageBox.information(
@@ -847,7 +849,9 @@ class BatchManagerDialog(QDialog):
         jobs = self._jobs()
         if 0 <= index < len(jobs):
             self._status_label.setText(
-                f"Processing {index + 1} of {len(jobs)}: {jobs[index].name}"
+                self.tr("Processing %(index)d of %(total)d: %(name)s")
+                % {"index": index + 1, "total": len(jobs),
+                   "name": jobs[index].name}
             )
 
     def _drives_progress_bar(self, index):
@@ -934,15 +938,17 @@ class BatchManagerDialog(QDialog):
         if held and not cancelled:
             QMessageBox.information(
                 self, self.tr("Batch finished"),
-                f"{summary}\n\n{held} file(s) need repairing before they can be "
-                "cut. Click Edit on each to run Quick Stream Fix and confirm "
-                "the cut points, then run the batch again.",
+                self.tr("%(summary)s\n\n%(held)d file(s) need repairing "
+                        "before they can be cut. Click Edit on each to run "
+                        "Quick Stream Fix and confirm the cut points, then "
+                        "run the batch again.")
+                % {"summary": summary, "held": held},
             )
         elif failed and not cancelled:
             QMessageBox.warning(
                 self, self.tr("Batch finished"),
-                f"{summary}\n\nSee the Status column for what went wrong "
-                "with the failed jobs.",
+                self.tr("%s\n\nSee the Status column for what went wrong "
+                        "with the failed jobs.") % summary,
             )
 
     # ------------------------------------------------------------------ #

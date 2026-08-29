@@ -89,7 +89,8 @@ class ConfigEditorDialog(QDialog):
             self._status.setText("")
         except Exception as exc:
             self._editor.setPlainText("")
-            self._status.setText(f"Could not read the file: {exc}")
+            self._status.setText(
+                self.tr("Could not read the file: %s") % exc)
 
     def _save(self):
         text = self._editor.toPlainText()
@@ -99,8 +100,9 @@ class ConfigEditorDialog(QDialog):
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             self._status.setText(
-                f"Not valid JSON (line {exc.lineno}, column {exc.colno}): "
-                f"{exc.msg}. Nothing was saved."
+                self.tr("Not valid JSON (line %(line)d, column %(col)d): "
+                        "%(msg)s. Nothing was saved.")
+                % {"line": exc.lineno, "col": exc.colno, "msg": exc.msg}
             )
             return
 
@@ -156,7 +158,7 @@ class ConfigEditorDialog(QDialog):
             with open(self._config_file, "w", encoding="utf-8") as f:
                 f.write(text)
         except Exception as exc:
-            self._status.setText(f"Could not save: {exc}")
+            self._status.setText(self.tr("Could not save: %s") % exc)
             return
 
         QMessageBox.information(

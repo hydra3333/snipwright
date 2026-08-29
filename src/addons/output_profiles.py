@@ -114,7 +114,7 @@ class OutputProfile:
                  output_dir="", favourite=False, enabled=True, builtin=False):
         self.name = name
         self.container = container          # "match" | "mkv" | "mp4"
-        self.audio = audio                  # "copy" | "aac"
+        self.audio = audio                  # "copy" | "aac" | "none"
         self.audio_bitrate = audio_bitrate  # kbps, or AAC_AUTO (0) for automatic
         self.aspect = aspect                # "source" | "4:3" | "16:9"
         # Video handling.  "copy" is the lossless default (the video is copied,
@@ -190,6 +190,8 @@ class OutputProfile:
         return QT_TRANSLATE_NOOP("ProfileEditor", "Smart")
 
     def audio_label(self):
+        if self.audio == "none":
+            return "No audio (silent)"
         if self.audio == "aac":
             if self.audio_bitrate:
                 return "Re-encode AAC %d kbps" % self.audio_bitrate

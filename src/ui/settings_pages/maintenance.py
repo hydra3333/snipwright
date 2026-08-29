@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.settings_pages import SettingsPage
-from ui.settings_widgets import hint
+from ui.settings_widgets import hint, PlainFolderRow
 from ui.settings_pages.files import _divider
 from PySide6.QtCore import QT_TRANSLATE_NOOP
 
@@ -27,8 +27,8 @@ class MaintenancePage(SettingsPage):
         cache_row.addWidget(QLabel(self.tr("Delete cached data older than")))
         self._cache_age = QSpinBox()
         self._cache_age.setRange(0, 3650)
-        self._cache_age.setSuffix(" days")
-        self._cache_age.setSpecialValueText("never")   # shown when value is 0
+        self._cache_age.setSuffix(self.tr(" days"))
+        self._cache_age.setSpecialValueText(self.tr("never"))  # value 0
         self._cache_age.setValue(int(s.get("cache_max_age_days", 30)))
         cache_row.addWidget(self._cache_age)
         cache_row.addStretch(1)
@@ -49,8 +49,8 @@ class MaintenancePage(SettingsPage):
         rn_row.addWidget(QLabel(self.tr("Delete remembered renamer matches older than")))
         self._renamer_age = QSpinBox()
         self._renamer_age.setRange(0, 3650)
-        self._renamer_age.setSuffix(" days")
-        self._renamer_age.setSpecialValueText("never")
+        self._renamer_age.setSuffix(self.tr(" days"))
+        self._renamer_age.setSpecialValueText(self.tr("never"))
         self._renamer_age.setValue(int(s.get("renamer_cache_max_age_days", 0)))
         rn_row.addWidget(self._renamer_age)
         rn_row.addStretch(1)
@@ -134,6 +134,26 @@ class MaintenancePage(SettingsPage):
         """
         from utils.qsf_temp import temp_dir
 
+        # Where they go.  Retention does not solve the problem this does:
+        # deleting copies afterwards is no help when one copy needs more room
+        # than the drive has, and a working copy is a full remux of the source.
+        # Raised by a user whose Windows system drive filled up mid-repair.
+        self._qsf_dir = PlainFolderRow(
+            self.tr("Working copy folder"),
+            self._settings().get("qsf_temp_dir", ""),
+            temp_dir(),
+        )
+        self.add(self._qsf_dir)
+        self.add(hint(self.tr(
+            "Leave blank to use the system temporary folder, shown above as "
+            "the placeholder. A working copy is roughly the size of the "
+            "recording it was made from, so somewhere with room for several "
+            "of them is worth choosing - on Windows the system folder is on "
+            "the system drive, which is usually the smallest. If the folder "
+            "set here goes missing or cannot be written to, the system folder "
+            "is used instead."
+        )))
+
         row = QHBoxLayout()
         self._qsf_label = QLabel()
         row.addWidget(self._qsf_label)
@@ -148,9 +168,9 @@ class MaintenancePage(SettingsPage):
         self.add_layout(row)
         self.add(hint(self.tr(
             "Repairing a recording with Quick Stream Fix writes a working copy "
-            "to the system temporary folder, and the editor cuts that copy. "
-            "They are kept so you can come back to a recording later, and "
-            "deleted once they reach the age below."
+            "to the folder above, and the editor cuts that copy. They are kept "
+            "so you can come back to a recording later, and deleted once they "
+            "reach the age below."
         )))
 
         age_row = QHBoxLayout()
@@ -245,6 +265,7 @@ class MaintenancePage(SettingsPage):
     def save(self, config):
         settings = config.setdefault("settings", {})
         settings["update_check"] = self._update_check.currentData()
+        settings["qsf_temp_dir"] = self._qsf_dir.folder()
         settings["qsf_temp_max_age_days"] = self._qsf_age.value()
         settings["cache_max_age_days"] = self._cache_age.value()
         settings["renamer_cache_max_age_days"] = self._renamer_age.value()

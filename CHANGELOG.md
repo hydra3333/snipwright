@@ -6,6 +6,200 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-08-29
+
+### Added
+
+- **Chalkline, a built-in advert detector.** Detecting commercials needed
+  Comskip, a separate program to find, install and point Snipwright at, with
+  an `.ini` to configure. Chalkline is part of Snipwright and needs none of
+  that.
+
+  It reads three things from the recording — the channel logo, the shape of
+  the picture, and the aspect ratio the broadcaster declares — and where they
+  disagree it prefers to report nothing rather than guess. That matters more
+  than it sounds: a missed break costs you a manual pass through the
+  timeline, while an invented one silently removes part of the programme, and
+  that is not recoverable once the video has been saved.
+
+  Which detector runs is chosen in *Settings → Advert detection*, and the
+  choice applies to both *Detect Commercials* in the editor and the Watcher's
+  unattended scans. Comskip's program path, its `.ini` and the per-channel
+  `.ini` selection have moved onto that page from *External tools*, so
+  everything to do with finding adverts is in one place.
+
+  Chalkline learns each channel's logo from the edits you make. When you
+  correct a detection and save the project, it remembers what that channel's
+  logo looks like and finds the breaks more accurately on the next recording
+  from the same channel. It only ever learns from a project you have edited
+  yourself — never from its own unattended results, which would teach it from
+  its own mistakes. This can be turned off on the same settings page.
+
+- **EDL cut lists can be imported and exported.** Snipwright could read the
+  EDL that Comskip produces during Detect Commercials, but there was no way to
+  load one of your own. Choosing an `.edl` through *Import Project* gave
+  "This project file could not be read: syntax error: line 1, column 0",
+  because the file was being handed to the project reader, which expects XML.
+  Dragging one onto the window did nothing at all, and opening one from a file
+  manager pointed at a *File → Import → EDL* menu entry that has never
+  existed.
+
+  An EDL holds cut times and nothing else — no reference to the recording it
+  describes — so it cannot open a video the way a project can. *Import
+  Project* now accepts EDLs and applies them to the video already open; if
+  none is, it offers to find the recording the cut list belongs to, the same
+  prompt a project gets when its source has moved. Dragging an EDL onto the
+  window and opening one from a file manager both do the same thing.
+
+  Cut lists can be written out too, as a second format in *Save Project As*
+  rather than a menu entry of its own. An EDL saved this way does not become
+  the current project, so Ctrl+P still saves a full `.vprj` and cannot quietly
+  replace your work with a copy that has no marks in it.
+
+  Because an EDL names no video, nothing normally stops one being applied to
+  the wrong recording — and the result looks plausible rather than broken.
+  Two shapes are now stopped for: a cut list that runs past the end of the
+  video, which nothing legitimate does, and one that covers less than half of
+  it, which usually means the times came from a shorter recording. Neither is
+  certain, so both ask rather than refuse. Where nothing looks wrong the
+  status bar reports how far the cut list reaches and how long the video is,
+  because no check can be sure and the numbers are worth seeing.
+
+- **The Quick Stream Fix working folder can now be chosen.** Settings →
+  Maintenance gains a folder box above the existing retention setting; leave
+  it blank and the system temporary folder is used exactly as before. A
+  working copy is a full remux of the recording, so it is roughly the size of
+  the original, and on Windows the system temporary folder sits on the system
+  drive — usually the smallest one on the machine. Deleting old copies, which
+  Snipwright has done since 2.1.0, does not help at all when a *single* repair
+  needs more room than that drive has: those are two different problems and
+  only one of them had a fix. Raised by PaulWebster, who filled a Windows
+  system drive part-way through a repair. If the folder set here goes missing
+  or cannot be written to — a disconnected share, a renamed drive — the system
+  folder is used instead rather than the repair failing.
+
+- **Export without audio.** Output profiles gain a third audio setting, "No
+  audio (silent)", alongside the lossless copy and the AAC re-encode. Useful
+  for a recording with background noise you would rather lose entirely than
+  keep. The audio tracks are never offered to the cutter rather than being
+  stripped afterwards, so nothing is decoded, re-encoded or muxed on their
+  account, and the export is correspondingly quicker. The bitrate, surround
+  and loudness settings grey out when it is chosen, since there is no longer
+  a track for them to act on.
+
+### Changed
+
+- **Projects Snipwright writes now carry Snipwright's name.** The version
+  element inside a `.vprj` was still `<VideoReDoVersion>`, even though its
+  contents have said "Snipwright" for some time. It is now
+  `<SnipwrightVersion>`, and both are read, so every existing project still
+  opens. The root element is deliberately unchanged: VideoReDo matches on
+  that, and renaming it would stop VideoReDo opening Snipwright's projects
+  altogether, whereas a child element it does not recognise is simply
+  ignored. Nothing else about the file has changed.
+
+- **File dialogues no longer name another editor.** *Save Project As* and the
+  project pickers described the format as a “VideoReDo Project”. Snipwright
+  writes the same `.vprj` format and always will, but the dialogue is naming
+  Snipwright's own output, so it now reads “Snipwright Project”. The
+  acknowledgement in the About box is unchanged.
+
+### Fixed
+
+- **The current frame no longer hides which scene it belongs to.** In the
+  thumbnail strip, the frame under the playhead was drawn with a blue border
+  *instead of* the yellow one marking a frame as part of a kept scene — so the
+  one frame whose membership matters most, the one you have just stepped onto,
+  was the only frame not showing it. Stepping towards a cut, the yellow was
+  visible the whole way and then vanished at exactly the frame you were
+  checking. The cursor is now drawn as a ring *inside* the frame's own border
+  rather than replacing it, so both read at once. Reported by PaulWebster,
+  who could not tell when he had reached the edge of a cut while reviewing
+  cut points after a repair. Nothing in the layout changed.
+
+- **An empty audio-description track is no longer reported as a fault.**
+  A recording whose description track carries nothing during the programme —
+  because the description belongs to whatever aired next — could finish its
+  export with an error saying the track "could not be written", that "the
+  audio is present in the recording", and asking for a bug report. None of
+  that was true, and the check that would have said so had already run: the
+  export knew the track held no audio in the scenes kept, and then ignored
+  that in favour of reporting the muxing step that had failed *because* the
+  track was empty. Where the dropped track carries nothing within the scenes
+  you kept, it is now described as what it is — nothing lost. A track that
+  genuinely holds audio and could not be written is still reported as a
+  fault, which is the case that wording was written for.
+
+- **Settings pages no longer spread their controls out to fill the window.**
+  The pages were meant to pack their contents at the top, but the alignment
+  they used has no effect on a page's own layout, so each page stretched its
+  rows to fill whatever height the dialog had. It went unnoticed while the
+  pages were of similar length — the dialog is as tall as its tallest page,
+  so only a shorter page shows the gap.
+
+- **Project files written by Comskip appear in the file dialog again.** The
+  filter matched `.vprj` and `.VPRJ`, but Comskip writes `.VPrj`, which is
+  neither — so the files the dialog is most often pointed at were the ones it
+  could not show. All three spellings are now matched.
+
+- **Every Settings page showed an English heading.** Each page's title is
+  marked for translation and looked up when the navigation list is built, but
+  the heading at the top of the page itself was given the raw untranslated
+  string. So a German user saw *Advert detection* above a page of German
+  controls, on all six pages. The string was in the translation file and
+  counted as translated the whole time — it was simply never looked up, which
+  is why no count of untranslated strings could have found it.
+
+- **Settings field labels are translatable.** The labels and placeholder text
+  on the file and folder rows — Comskip's program and `.ini`, the three
+  Files & folders paths, the log folder, and the mkvmerge, ffmpeg and ffprobe
+  paths — were never wrapped for translation, leaving English labels beside
+  German descriptions. Fourteen strings, now translated. They were invisible
+  to the untranslated-string scan because it reads a call's first argument and
+  these are the second and third.
+
+- **The German interface addressed the reader inconsistently.** Eight strings
+  used the informal *du* while the other nine hundred-odd used the formal
+  *Sie* — the update checker, the favourite-folders hint and the batch requeue
+  tooltip among them. All now use *Sie*. (The user guide is written throughout
+  in *du*; that is unchanged.)
+
+- **Two age settings on the Maintenance page showed English units.** The
+  cached-data and renamer-match age spinboxes read "30 days" and "never" in
+  German, directly below a third reading "7 Tage" — the newer working-copy
+  setting wrapped its suffix for translation and the two older ones never had.
+  Both strings were already translated, so nothing but the lookup was missing.
+
+### Documentation
+
+- **The guide no longer presents Comskip as the only detector.** Sections 1
+  and 3, the keyboard shortcut table and the VideoReDo comparison all still
+  described ad detection as a Comskip feature, and the introduction called
+  Comskip "optional but recommended". Chalkline is now the default answer in
+  all four places, with Comskip presented as the alternative to reach for when
+  Chalkline is not giving good results on a particular channel.
+
+- **Added a Batch Manager screenshot**, showing a queue part-way through with
+  a job handed over from the editor mid-export.
+
+
+- **The user guide covers everything added since 2.4.0**, in both languages:
+  choosing a detector, how Chalkline works and why it reports nothing rather
+  than guessing, learning channel logos from your edits and the conditions
+  that apply, the Remembered logos dialog and the channel-name-versus-service-ID
+  pairing it exists for, the silent audio option, the configurable working-copy
+  folder, and the Watcher following the editor's detector choice. The settings
+  reference listed five pages under names that no longer matched the dialog.
+
+- **Three sections of the German guide were hollow** and had been since
+  15 August: the keyboard shortcuts section had lost the paragraph about skip
+  distances and the `jump_back_30` naming, *Saving video* had lost an entire
+  note covering multi-track audio, audio-description flags and DVB subtitles,
+  and *Getting started* had dropped drag-and-drop opening and multi-file
+  selection. A fourth, the note on moving projects to and from VideoReDo, had
+  quietly lost its warning that a drifted mark cuts where it now sits. Found
+  by comparing the two guides section by section rather than by totals.
+
 ## [2.4.0] - 2026-08-13
 
 ### Added

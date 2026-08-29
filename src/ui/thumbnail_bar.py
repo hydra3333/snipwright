@@ -55,6 +55,12 @@ class _Thumb(QLabel):
         # Picture type letter ("I"/"P"/"B") to overlay, or "" for none.
         self.letter = ""
 
+        # True when the playhead sits on this frame.  Derived rather than
+        # assigned: the refresh paths already keep frame_index correct, and
+        # a separate flag set alongside it in seven places would be one
+        # missed edit away from a stale ring.
+        self.bar = None
+
         self.setFixedHeight(
             THUMB_HEIGHT
         )
@@ -108,8 +114,10 @@ class _Thumb(QLabel):
 
     def paintEvent(self, event):
         # Draw the thumbnail (pixmap + border) as usual, then overlay the
-        # picture-type letter in the top-left corner if one is set.
+        # cursor ring and the picture-type letter.
         super().paintEvent(event)
+
+        self._draw_cursor_ring()
 
         if not self.letter:
             return
@@ -144,6 +152,65 @@ class _Thumb(QLabel):
         finally:
             painter.end()
 
+    @property
+    def is_cursor(self):
+        """Whether the playhead is on this thumb."""
+        bar = self.bar
+        if bar is None or self.frame_index < 0:
+            return False
+        try:
+            return self.frame_index == bar.main.current_frame
+        except AttributeError:
+            return False
+
+    def _draw_cursor_ring(self):
+        """Ring the current frame *inside* its own border, not instead of it.
+
+        The cursor used to be a stylesheet border like every other state,
+        which meant it replaced whatever the frame already showed.  The one
+        frame whose scene membership matters most - the one you have just
+        stepped onto - was therefore the only frame not showing it, so
+        stepping through a cut you could see the boundary right up until you
+        reached it, at which point the blue took over and the yellow
+        vanished.  Reported by a user reviewing cut points after a repair,
+        who could not tell when he had arrived at the edge.
+
+        Drawn rather than styled because Qt style sheets give a widget one
+        border, and two rings are wanted here: the outer says which scene the
+        frame belongs to, the inner says the cursor is on it.  Inset by the
+        outer border's width plus a pixel of breathing room, so neither
+        covers the other.
+        """
+        if not self.is_cursor:
+            return
+
+        inset = _OUTER_BORDER + _CURSOR_GAP
+        ring = _CURSOR_RING
+        w = self.width()
+        h = self.height()
+        if w <= 2 * (inset + ring) or h <= 2 * (inset + ring):
+            return
+
+        painter = QPainter(self)
+        try:
+            colour = QColor(_CURSOR_COLOUR)
+            # Four filled rectangles rather than drawRect with a wide pen.
+            # A pen is centred on the path it strokes, and for an even width
+            # Qt has to put the odd half-pixel on one side: the left and top
+            # edges came out flush against the border while the right and
+            # bottom sat a pixel short of it.  Visible when zoomed in, and
+            # exactly the sort of asymmetry that looks like a rendering
+            # glitch rather than a deliberate inset.  Filling the four sides
+            # explicitly leaves no geometry to interpret.
+            inner_w = w - 2 * inset
+            inner_h = h - 2 * inset
+            painter.fillRect(inset, inset, inner_w, ring, colour)
+            painter.fillRect(inset, h - inset - ring, inner_w, ring, colour)
+            painter.fillRect(inset, inset, ring, inner_h, colour)
+            painter.fillRect(w - inset - ring, inset, ring, inner_h, colour)
+        finally:
+            painter.end()
+
 
 # Picture-type badge colours: I/IDR/keyframes green, P amber, B grey-blue.
 _FRAME_TYPE_COLOURS = {
@@ -154,12 +221,30 @@ _FRAME_TYPE_COLOURS = {
 }
 
 
+# Every thumbnail's outer border is one pixel, and says which scene the frame
+# belongs to.  The cursor ring is drawn inside that - see
+# ThumbnailBarLabel._draw_cursor_ring() - so a frame can show both at once.
+#
+# The gap between the two started at one pixel, to stop them reading as a
+# single thick band.  Set to zero once it was seen on real thumbnails: yellow
+# against blue separates on colour alone, and closing the gap gives the ring
+# a pixel more image to sit against, which is worth having on a dark frame
+# where it competes with black.  Put it back to 1 if the two ever end up in
+# similar colours.
+_OUTER_BORDER = 1
+_CURSOR_GAP = 0
+_CURSOR_RING = 2
+_CURSOR_COLOUR = "#2f9bff"
+
 _STYLE_EMPTY = (
     "background:#081420; border:1px solid #222;"
 )
 
+# Kept for the cursor's darker backing, which still reads as "you are here"
+# underneath the ring.  The border is the plain one: the border now always
+# belongs to the scene state, so the ring never erases it.
 _STYLE_CURSOR = (
-    "background:#001026; border:3px solid #2f9bff;"
+    "background:#001026; border:1px solid #222;"
 )
 
 _STYLE_MARKER = (
@@ -276,6 +361,11 @@ class ThumbnailBar(QWidget):
 
         for _ in range(n):
             label = _Thumb()
+            # So the thumb can tell whether the playhead is on it without
+            # every refresh path having to remember to say so - frame_index
+            # is already maintained everywhere, and current_frame is the
+            # single source of truth for where the cursor is.
+            label.bar = self
             label.clicked.connect(self._on_thumb_clicked)
             self._layout.addWidget(label)
             self._labels.append(label)
@@ -580,16 +670,33 @@ class ThumbnailBar(QWidget):
         self.main.goto_frame(frame_index)
 
     def _style_for(self, frame_index):
-        window = self.main
+        """The border style for a frame: which scene it belongs to.
 
-        if frame_index == window.current_frame:
-            return _STYLE_CURSOR
+        The cursor is deliberately not returned here.  It used to be checked
+        first and to win, which meant the frame under the cursor was the one
+        frame not showing its scene membership - the opposite of useful when
+        the question is "have I reached the edge of this cut yet?".  It is
+        drawn as a ring inside this border instead, so both show at once.
+
+        The cursor keeps its darker background, which still reads as "you are
+        here" underneath the ring.
+        """
+        window = self.main
+        cursor = frame_index == window.current_frame
 
         if window.scenes.has_marker(frame_index):
-            return _STYLE_MARKER
+            style = _STYLE_MARKER
+        else:
+            style = _STYLE_NORMAL
+            for range_start, range_end in window.selection.ranges:
+                if range_start <= frame_index <= range_end:
+                    style = _STYLE_SELECTED
+                    break
 
-        for range_start, range_end in window.selection.ranges:
-            if range_start <= frame_index <= range_end:
-                return _STYLE_SELECTED
-
-        return _STYLE_NORMAL
+        if cursor:
+            # Swap only the background, keeping whichever border the frame's
+            # scene state earned.
+            style = style.replace("background:#081420", "background:#001026")
+            style = style.replace("background:#203000", "background:#12240a")
+            style = style.replace("background:#06121c", "background:#001026")
+        return style

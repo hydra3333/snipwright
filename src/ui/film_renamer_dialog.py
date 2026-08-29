@@ -617,7 +617,8 @@ class FilmRenamerDialog(QDialog):
             return
         label = self.preset_combo.currentText()
         if QMessageBox.question(
-            self, self.tr("Delete preset"), "Delete the preset '%s'?" % label
+            self, self.tr("Delete preset"),
+            self.tr("Delete the preset '%s'?") % label
         ) != QMessageBox.Yes:
             return
         presets = [(l, p) for l, p in
@@ -846,7 +847,9 @@ class FilmRenamerDialog(QDialog):
         self.clear_btn.setEnabled(done > 0)
         self._update_example()
         self.status_label.setText(
-            "%d ready · %d done · %d total" % (ready, done, len(self.rows))
+            self.tr("%(ready)d ready \u00b7 %(done)d done \u00b7 "
+                    "%(total)d total")
+            % {"ready": ready, "done": done, "total": len(self.rows)}
         )
 
     # -- rename ------------------------------------------------------------
@@ -898,11 +901,12 @@ class FilmRenamerDialog(QDialog):
             QMessageBox.information(
                 self,
                 self.tr("Film Renamer"),
-                "Renamed %d film(s).%s%s"
+                self.tr("Renamed %d film(s).%s%s")
                 % (
                     done,
-                    ("\nSkipped %d (target already exists)." % skipped) if skipped else "",
-                    ("\nFailed %d." % failed) if failed else "",
+                    (self.tr("\nSkipped %d (target already exists).")
+                     % skipped) if skipped else "",
+                    (self.tr("\nFailed %d.") % failed) if failed else "",
                 ),
             )
         # Renamed rows stay in the list marked Done (greyed); 'Clear Completed'

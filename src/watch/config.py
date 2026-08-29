@@ -250,7 +250,32 @@ class WatchConfig:
     def ignore_prune_months(self, value):
         self._data["ignore_prune_months"] = max(1, int(value))
 
-    # --- shared Comskip paths (read-only from the editor's config) -------- #
+    # --- shared detector settings (read-only from the editor's config) ---- #
+
+    @property
+    def ad_detector(self):
+        """Which detector to run: "chalkline" or "comskip".
+
+        Read from the shared editor config (Settings > Advert detection), the
+        same as ini_by_channel below, so the Watcher and the editor's Detect
+        Commercials always agree.  Offering the Watcher its own copy of this
+        choice would let a recording be detected one way unattended and
+        another way by hand, which is confusing to explain and worse to
+        debug.
+
+        Defaults to Chalkline, which is what an installation with no saved
+        preference gets: it is built in and needs nothing installed, whereas
+        defaulting to Comskip would mean a Watcher that refuses to scan until
+        the user has gone and compiled something.
+        """
+        try:
+            cfg = ensure_config()
+            value = str(
+                cfg.get("settings", {}).get("ad_detector", "chalkline")
+            ).lower()
+        except Exception:
+            return "chalkline"
+        return value if value in ("chalkline", "comskip") else "chalkline"
 
     def comskip_paths(self):
         """Return (binary, ini) from the editor's config, or ("", "")."""

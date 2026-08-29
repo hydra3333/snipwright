@@ -384,8 +384,8 @@ class TrimCopyDialog(QDialog):
         if os.path.exists(dst):
             resp = QMessageBox.question(
                 self, self.tr("Trim and Copy"),
-                "%s already exists.\n\nOverwrite it?"
-                % (os.path.basename(dst),),
+                self.tr("%s already exists.\n\nOverwrite it?")
+                % os.path.basename(dst),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -416,8 +416,8 @@ class TrimCopyDialog(QDialog):
         self._reset_after_copy()
         QMessageBox.information(
             self, self.tr("Trim and Copy"),
-            "Copy complete.\n\n%s\n%s written."
-            % (path, _fmt_size(written)))
+            self.tr("Copy complete.\n\n%(path)s\n%(size)s written.")
+            % {"path": path, "size": _fmt_size(written)})
 
     def _on_failed(self, message):
         self._reset_after_copy()

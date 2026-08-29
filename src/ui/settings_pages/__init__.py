@@ -16,7 +16,7 @@ a page never needs a reference to the dialog itself.
 All user-facing text uses British English.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from ui.settings_widgets import heading
@@ -53,8 +53,27 @@ class SettingsPage(QWidget):
         self._ctx = ctx
         self._layout = QVBoxLayout(self)
         self._layout.setAlignment(Qt.AlignTop)
-        self._layout.addWidget(heading(self.TITLE))
+        # TITLE is QT_TRANSLATE_NOOP("Settings", ...), so it still has to be
+        # translated at the point of use.  The dialog's navigation list does
+        # this, the heading did not, and every page therefore showed an
+        # English heading above German controls.  Only a German screenshot
+        # makes that visible - the string is present in the .ts and counts as
+        # translated, it was simply never looked up.
+        self._layout.addWidget(
+            heading(QCoreApplication.translate("Settings", self.TITLE))
+        )
         self.build()
+        # Soak up whatever height is left over.
+        #
+        # setAlignment(Qt.AlignTop) above does not do this: on a widget's own
+        # layout it sets where the layout sits inside its parent, not how its
+        # items are packed, so every page has always stretched its controls to
+        # fill the dialog.  It went unnoticed while the pages were of similar
+        # height - the dialog is as tall as its tallest page, so a short page
+        # gains the difference, spread out between its rows.  Adding one
+        # control to the tallest page was enough to make Files & folders look
+        # like it had grown gaps.
+        self._layout.addStretch(1)
 
     # -- helpers ---------------------------------------------------------- #
 
@@ -84,6 +103,7 @@ def page_classes():
     from ui.settings_pages.general import GeneralPage
     from ui.settings_pages.files import FilesPage
     from ui.settings_pages.logs import LoggingPage
+    from ui.settings_pages.ad_detection import AdDetectionPage
     from ui.settings_pages.tools import ToolsPage
     from ui.settings_pages.maintenance import MaintenancePage
 
@@ -91,6 +111,7 @@ def page_classes():
         GeneralPage,
         FilesPage,
         LoggingPage,
+        AdDetectionPage,
         ToolsPage,
         MaintenancePage,
     ]

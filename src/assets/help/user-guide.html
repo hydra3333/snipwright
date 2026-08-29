@@ -70,6 +70,7 @@
     .gimg { width: 100%; height: auto; }
     .m800 { max-width: 800px; }
     .m762 { max-width: 762px; }
+    .m660 { max-width: 660px; }
     .m640 { max-width: 640px; }
     .m566 { max-width: 566px; }
     .m560 { max-width: 560px; }
@@ -110,12 +111,15 @@ for around two decades, and I have kept the interface as close to it as I sensib
 functionality work in a VideoReDo-like way wherever possible. Think of it as a
 <strong>lighter alternative</strong>, though: Snipwright brings the core VideoReDo workflow
 to a native Linux application, but it does not aim to match VideoReDo's full feature set.</p>
-<p>Beyond cutting, Snipwright can detect commercials automatically with Comskip, rename
+<p>Beyond cutting, Snipwright can detect commercials automatically, rename
 recordings using data from TMDB, and help semi-automate the whole record-to-library
 routine through a folder watcher and a batch queue. It does not run end-to-end on its own
 &mdash; you stay in the loop &mdash; but it takes a lot of the manual work out.</p>
 <div class="note">Snipwright needs <code>ffmpeg</code> and <code>ffprobe</code> on your
-system. Comskip is optional but recommended for automatic ad detection (see section 4).</div>
+system. Automatic ad detection works out of the box with <strong>Chalkline</strong>, which is
+built in and needs nothing installed or configured. <strong>Comskip</strong> is supported as
+an alternative if Chalkline is not giving you the results you want on a particular channel
+&mdash; it is a separate program you install yourself. Either way, see section 4.</div>
 
 <h2 id="start">2. Getting started</h2>
 <p>Open a recording with <strong>File &rarr; Open Video</strong> (<kbd>Ctrl+O</kbd>),
@@ -168,10 +172,10 @@ next time you open a video.</p>
 the way you build it differs. The buttons beneath the transport controls change to match
 the mode, and the list on the right shows either the cuts or the kept scenes accordingly.</p>
 <p>Automatic ad detection (see <a href="#detect">Automatic ad detection</a>) works in
-either mode: Comskip marks where it believes the breaks fall, giving you a starting point
-to refine rather than a blank timeline. How close those marks land depends on your Comskip
-<code>.ini</code> settings and the channel, so it is always worth checking each one before
-saving.</p>
+either mode: the detector marks where it believes the breaks fall, giving you a starting
+point to refine rather than a blank timeline. How close those marks land depends on the
+channel &mdash; and, with Comskip, on your <code>.ini</code> settings &mdash; so it is
+always worth checking each one before saving.</p>
 <h3>Navigating</h3>
 <p>Use the transport buttons or the keyboard to move through the recording: step one
 frame at a time, skip forwards or backwards, or jump to the start or end. Watch the
@@ -265,20 +269,90 @@ markers and those are never replaced. Recordings straight off a tuner have no ch
 nothing changes for them.</p>
 
 <h2 id="detect">4. Automatic ad detection and projects</h2>
+<p>Rather than mark everything by hand, you can let Snipwright find the adverts. Run the
+detector from the <strong>Tools</strong> menu (<kbd>Ctrl+A</kbd>); it analyses the recording
+in the background and turns its results into kept scenes, which you can then fine-tune by
+eye.</p>
+<p>There are two detectors, and you choose between them under
+<strong>Settings &rarr; Advert detection</strong>. The choice applies everywhere &mdash; the
+editor and the watcher both use whichever one is selected, so a recording is never detected
+one way by hand and another way unattended.</p>
+<ul>
+  <li><strong>Chalkline</strong> is built into Snipwright. There is nothing to install and
+  nothing to configure, and it is what a new installation uses.</li>
+  <li><strong>Comskip</strong> is a separate program you install yourself, and needs its
+  path setting before it will run.</li>
+</ul>
+<h3>Chalkline</h3>
+<p>Chalkline reads the channel logo, the shape of the picture and the aspect ratio to work
+out where the breaks are. Its guiding principle is that a wrong answer is worse than no
+answer: when it cannot tell, it reports nothing at all rather than guessing and removing
+part of the programme. A recording it says nothing about is one to mark by hand, not one
+where the adverts have been missed silently.</p>
+<div class="note">Detection takes a little longer than Comskip &mdash; a few per cent over
+a run of several recordings &mdash; because Chalkline decodes the recording rather than
+reading the broadcast's own signalling. On a single full-length programme the difference is
+not something you would notice. The progress is reported as it goes, and the editor stays
+usable throughout.</div>
+<h3 id="learning">Learning channel logos</h3>
+<p>Chalkline gets better at a channel the more you use it, but only from work you have
+checked yourself. With <strong>&ldquo;Learn channel logos from my edits&rdquo;</strong>
+ticked, correcting a detection and saving the project teaches it what that channel's logo
+looks like, and the next recording from that channel is detected better.</p>
+<p>It never learns from its own unattended results. Teaching a detector from its own guesses
+compounds whatever it got wrong, so the watcher's output is deliberately excluded &mdash;
+only a project you have edited and saved yourself counts.</p>
+<p>A few conditions have to hold before anything is learned, and they are all about having
+trustworthy ground truth to learn from:</p>
+<ul>
+  <li>The project is saved as a <code>.vprj</code>. An EDL does not record the recording's
+  duration, so padding at the ends could not be told apart from adverts.</li>
+  <li>The edit has at least one advert break in it, of a plausible length, and keeps more
+  than half the recording.</li>
+  <li>Snipwright can work out which channel the recording came from.</li>
+  <li>Nothing is remembered for that channel yet. A logo that is already working is never
+  silently replaced &mdash; one poor edit could otherwise undo a good one with nothing to
+  show that it had happened. To force a fresh start, forget the channel in the Remembered
+  logos dialog first.</li>
+</ul>
+<div class="note"><strong>Learning takes several minutes, and it happens after the save.</strong>
+It decodes the whole recording, so the result arrives well after the save that triggered
+it. The status line tells you when learning has actually started, and again when it
+finishes &mdash; a save that will teach nothing stays silent, so no message means no
+learning was going to happen, not that it is still working.</div>
+<h3>Remembered logos</h3>
+<p>Open <strong>Settings &rarr; Advert detection &rarr; Remembered logos&hellip;</strong> to
+see what Chalkline has learned. Each row shows the channel, a drawing of the logo mask it
+has stored, how many pixels that mask covers and whether the logo is on screen constantly
+or only intermittently, and a contrast figure &mdash; higher is a cleaner signal to work
+from.</p>
+<p align="center" class="figrow"><img class="gimg m660" src="img/chalkline.png" width="660" height="452" alt="The Remembered logos dialog, listing learned channel logos"></p>
+<p align="center" class="cap">Logos Chalkline has learned. The top three rows carry both a channel name and a service ID, so recordings from either kind of recorder are matched to the same logo; the fourth has a name only.</p>
+<div class="note">The drawing is not there to let you recognise the brand; it is far too
+small for that. What it shows is whether the mask is a coherent blob or a handful of
+scattered fragments, and how large it is compared with the others &mdash; which is the
+useful question to ask of a stored logo.</div>
+<p>The <strong>Channel</strong> and <strong>Service ID</strong> columns are both editable,
+and this is the one thing in the dialog you may actually need to do. Recorders disagree
+about what they keep: some preserve the channel <em>name</em>, others only the numeric
+<em>service ID</em>. Neither keeps both, and Snipwright has no way to connect one to the
+other, so the same channel recorded on two different machines is learned twice and neither
+entry helps the other. Filling in the missing half of a row pairs them up, and from then on
+the logo is used for recordings from both.</p>
+<p><strong>Forget</strong> removes a stored logo after a confirmation. The channel is then
+learned again the next time you correct a detection for it and save &mdash; which is how you
+replace a logo that is not working well.</p>
 <h3>Comskip</h3>
-<p>Rather than mark everything by hand, you can let <strong>Comskip</strong> find the
-adverts. Run it from the <strong>Tools</strong> menu (<kbd>Ctrl+A</kbd>); it analyses the
-recording in the background and turns its results into kept scenes, which you can then
-fine-tune by eye.</p>
 <p>Comskip is a separate, free program and is <strong>not</strong> bundled with Snipwright,
 so you will need to download and install it first from its home on GitHub:
 <a href="https://github.com/erikkaashoek/Comskip">github.com/erikkaashoek/Comskip</a>.
 Once it is installed, point Snipwright at the Comskip binary and your <code>.ini</code> file
-under <strong>Settings &rarr; External tools</strong>.</p>
+under <strong>Settings &rarr; Advert detection</strong>, and set the detector there to
+Comskip.</p>
 <div class="note">If your recorder writes the channel name into the filename (for example
 Tvheadend, via its <code>$c</code> format), you can use a different <code>.ini</code> per
 channel. Tick <strong>&ldquo;Pick the .ini by channel name in the filename&rdquo;</strong>
-under <strong>Settings &rarr; External tools</strong>, then place files named
+under <strong>Settings &rarr; Advert detection</strong>, then place files named
 <code>Comskip_&lt;channel&gt;.ini</code> (such as <code>Comskip_BBC.ini</code> or
 <code>Comskip_ITV.ini</code>) in the same folder as your main <code>.ini</code>. When the
 channel name appears in a recording's filename that file is used &mdash; the longest,
@@ -372,8 +446,12 @@ one of the Container choices, which is worth keeping straight. A profile control
   re-encodes to H.265 for a much smaller file, at the cost of some quality and a good deal
   more time. Interlaced sources are deinterlaced when re-encoding to HEVC. Leave it on Copy
   unless you specifically want smaller files.</li>
-  <li><strong>Audio</strong> &mdash; smart copy (lossless) or re-encode to AAC at a chosen
-  or automatic bitrate.</li>
+  <li><strong>Audio</strong> &mdash; smart copy (lossless), re-encode to AAC at a chosen or
+  automatic bitrate, or <strong>No audio (silent)</strong>, which drops the sound
+  altogether and writes a video-only file. That is occasionally what you want for a clip
+  going into something else that will supply its own soundtrack, and it makes for a
+  markedly smaller file. It applies to every track, so a recording's audio description and
+  alternative languages go with it.</li>
   <li><strong>Surround audio</strong> &mdash; leave the channel layout alone, or downmix it
   to stereo. A 5.1 broadcast mix played through two speakers often has very quiet dialogue,
   because the centre channel carrying it simply isn't there; downmixing to stereo puts
@@ -512,8 +590,8 @@ year from TMDB.</p>
 <h2 id="automation">7. Automation: the watcher and batch manager</h2>
 <h3>The watcher</h3>
 <p>The watcher takes the donkey-work out of finding the adverts. It monitors your chosen
-recording folder(s) and, when a new recording appears, runs Comskip to mark where it thinks
-the adverts are, saving the result as a <strong>project file</strong>. It does not cut or
+recording folder(s) and, when a new recording appears, runs the detector to mark where it
+thinks the adverts are, saving the result as a <strong>project file</strong>. It does not cut or
 rename anything itself &mdash; it prepares the cuts for you. You stay in control: open a
 project in the editor to check and adjust the marks by eye, or add it to the Batch Manager
 to process as-is.</p>
@@ -522,6 +600,15 @@ to process as-is.</p>
 <div class="note">The watcher runs in the system tray and works <strong>completely
 independently</strong> of the main editor &mdash; you do not need Snipwright open for it to do
 its job.</div>
+<p>The watcher uses whichever detector is chosen under
+<strong>Settings &rarr; Advert detection</strong> in the editor. It has no separate setting of
+its own, and its control window shows which one it will use. With Chalkline there is nothing
+to set up; with Comskip selected but its path not yet set, the watcher says so rather than
+silently doing nothing, and you set the path in the editor.</p>
+<div class="note">The watcher never teaches Chalkline anything. Logo learning happens only
+when <em>you</em> correct a detection and save the project, because the watcher's output is
+the detector's own guess &mdash; learning from it would compound whatever it got wrong. See
+<a href="#learning">Learning channel logos</a>.</div>
 <h3>Ignoring programmes you do not want</h3>
 <p>Not every recording in the folder is yours to worry about. Right-click the tray icon and
 choose <strong>Edit ignore list</strong>, then add one programme title per line, so a
@@ -568,6 +655,8 @@ it from <strong>Tools &rarr; Batch Manager</strong> shows the live progress. <st
 Watch Folder</strong> only brings in recordings that are not already queued &mdash; including
 ones you sent over yourself with Queue to Batch &mdash; so you can press it as often as you
 like.</p>
+<p align="center" class="figrow"><img class="gimg m800" src="img/batch-manager.png" width="800" height="507" alt="The Batch Manager running a queue"></p>
+<p align="center" class="cap">The Batch Manager part-way through a queue: one job done, one encoding, two waiting, and at the bottom an export handed over from the editor while it was already running.</p>
 <div class="note">If the Batch Manager runs into a problem with a file &mdash; most often one
 that needs a Quick Stream Fix &mdash; it pauses that job and waits for you. Open the project,
 sort it out (for example run QSF), save it again, and it is requeued the next time you open
@@ -580,12 +669,18 @@ the Batch Manager.</div>
 <ul>
   <li><strong>General</strong> &mdash; overall behaviour and appearance, including the
   <strong>Theme</strong> (Follow&nbsp;system, Light or Dark).</li>
-  <li><strong>Files</strong> &mdash; your recording, output and working folders.</li>
-  <li><strong>External tools</strong> &mdash; paths to external programs (ffmpeg, ffprobe,
-  mkvmerge, and Comskip with its <code>.ini</code>), plus the optional per-channel
-  <code>.ini</code> selection described in section 4.</li>
-  <li><strong>Logs</strong> &mdash; view and manage the application log.</li>
-  <li><strong>Maintenance</strong> &mdash; housekeeping such as clearing cached indexes.</li>
+  <li><strong>Files &amp; folders</strong> &mdash; your recording, output and working
+  folders.</li>
+  <li><strong>Advert detection</strong> &mdash; which detector to use, Chalkline's logo
+  learning and the Remembered logos dialog, and Comskip's program path with its
+  <code>.ini</code> and the optional per-channel <code>.ini</code> selection. All of it is
+  described in section 4.</li>
+  <li><strong>External tools</strong> &mdash; paths to external programs (ffmpeg, ffprobe
+  and mkvmerge), and the TMDB API key the renamers use.</li>
+  <li><strong>Logging</strong> &mdash; where the log files are written, how many are kept,
+  and verbose logging.</li>
+  <li><strong>Maintenance</strong> &mdash; housekeeping: cached indexes, the working copy
+  folder and how long working copies are kept, and checking for new versions.</li>
 </ul>
 <div class="note">The <strong>Theme</strong> on the General page lets you follow your
 desktop's own colours or pin a <strong>Light</strong> or <strong>Dark</strong> look for
@@ -595,12 +690,19 @@ every theme, as is usual in video editors.</div>
 editor.</p>
 
 <h3>Quick Stream Fix working copies</h3>
-<p>Repairing a recording with Quick Stream Fix writes a working copy of it to the system
-temporary folder, and the editor cuts that copy rather than the original. Those copies are
+<p>Repairing a recording with Quick Stream Fix writes a working copy of it to the
+<strong>working copy folder</strong>, and the editor cuts that copy rather than the original.
+That folder is set under <strong>Settings &rarr; Maintenance</strong>; left blank it is the
+system temporary folder, which is what the field shows as its placeholder. Those copies are
 whole video files &mdash; often several gigabytes &mdash; and they are kept, so you can close
 Snipwright and come back to a recording later without repairing it again. Under
 <strong>Settings &rarr; Maintenance</strong> they are deleted once they reach a set age, a
 week by default.</p>
+<div class="note">Choosing a folder of your own is worth doing, because a working copy is
+roughly the size of the recording it came from and several can exist at once. On Windows the
+system temporary folder sits on the system drive, which is usually the smallest one you have.
+If the folder you set goes missing or cannot be written to, Snipwright falls back to the
+system folder rather than failing the repair.</div>
 <div class="note">This matters more on Windows than on Linux. Linux clears <code>/tmp</code>
 at every reboot, so working copies disappear on their own; Windows never clears its temporary
 folder, so without the age setting they would build up indefinitely. The same page shows how
@@ -652,7 +754,7 @@ rather than the current setting.</p>
   <tr><td>Previous / Next scene</td><td><kbd>F5</kbd> / <kbd>F6</kbd></td></tr>
   <tr><td>Go to scene start / end</td><td><kbd>S</kbd> / <kbd>E</kbd></td></tr>
   <tr><td>Toggle scene at cursor</td><td><kbd>A</kbd></td></tr>
-  <tr><td>Detect commercials (Comskip)</td><td><kbd>Ctrl+A</kbd></td></tr>
+  <tr><td>Detect Commercials</td><td><kbd>Ctrl+A</kbd></td></tr>
   <tr><td>Go to timecode</td><td><kbd>Ctrl+G</kbd></td></tr>
   <tr><td>Show video program info</td><td><kbd>Ctrl+L</kbd></td></tr>
   <tr><td>Undo / Redo</td><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td></tr>
@@ -663,6 +765,12 @@ rather than the current setting.</p>
   <li><strong>Nothing opens / export fails:</strong> check that <code>ffmpeg</code> and
   <code>ffprobe</code> are installed and, if needed, set their paths under
   <strong>Settings &rarr; External tools</strong>.</li>
+  <li><strong>Chalkline found nothing:</strong> that is a deliberate answer, not a failure.
+  When the evidence is not good enough it reports nothing rather than guessing and cutting
+  into the programme. Mark that recording by hand; if you save it as a project, Chalkline
+  learns the channel's logo from your edit and should do better on the next one from that
+  channel. A channel that never works is worth forgetting in the Remembered logos dialog so
+  it is learned again from a fresh edit.</li>
   <li><strong>Comskip results look off:</strong> Comskip is configured through its
   <code>.ini</code> file and benefits from being tuned to your source &mdash; in particular
   its frame rate. A well-tuned ini makes a big difference to detection quality. If different
@@ -757,15 +865,17 @@ it is probably here under another name.</p>
   </tr>
   <tr>
     <td>Ad-Detective</td>
-    <td><a href="https://github.com/erikkaashoek/Comskip">Comskip</a>, plus the Watcher</td>
-    <td>A different tool, not a rebadged one. Ad-Detective was built into VideoReDo and
-    tuned through its own parameters dialogue; Comskip is a separate program that Snipwright
-    calls, and it is configured through an <code>.ini</code> file rather than a GUI. There
-    is no equivalent of the Ad-Detective parameters window. What Snipwright does with the
-    result is the same idea: the detected breaks become ready-to-review cuts you confirm
-    before saving, and the Watcher can run the whole thing over new recordings unattended.
-    Comskip repays being tuned to your source &mdash; its frame rate especially &mdash; and
-    a good <code>.ini</code> makes a large difference to detection quality.</td>
+    <td><strong>Chalkline</strong> or <a href="https://github.com/erikkaashoek/Comskip">Comskip</a>, plus the Watcher</td>
+    <td>Not a rebadged Ad-Detective, but the closest equivalent. Ad-Detective was built into
+    VideoReDo and tuned through its own parameters dialogue. <strong>Chalkline</strong> is
+    the nearest thing in spirit: it is built into Snipwright and needs no setup at all, and
+    it learns each channel's logo from the edits you make rather than being tuned by hand.
+    <strong>Comskip</strong> is the alternative &mdash; a separate program Snipwright calls,
+    configured through an <code>.ini</code> file rather than a GUI, with no equivalent of the
+    Ad-Detective parameters window. It repays being tuned to your source, its frame rate
+    especially. What Snipwright does with the result is the same idea either way: the
+    detected breaks become ready-to-review cuts you confirm before saving, and the Watcher
+    can run the whole thing over new recordings unattended.</td>
   </tr>
   <tr>
     <td>Batch Manager</td>

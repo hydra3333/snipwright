@@ -1,14 +1,18 @@
-"""The watcher engine: find new recordings, run Comskip, write a .vprj.
+"""The watcher engine: find new recordings, detect the adverts, write a .vprj.
 
 Deliberately free of any Qt or UI code so it can be unit-tested headlessly and
 reused.  A standalone tray app drives it on a timer; it could equally be driven
-from a cron-style one-shot.
+from a cron-style one-shot.  This is why the Chalkline entry point it calls
+lives in chalkline.py rather than in chalkline_worker.py, which imports Qt.
 
 For each recording it finds that it hasn't already handled and that has
-finished recording, it runs Comskip to detect the commercials and writes a
-.vprj of those cuts into the output folder.  It never edits or exports the
-recording - the produced project is a starting point the user reviews and
-confirms in the editor (via the Batch Manager) before anything is cut.
+finished recording, it runs the chosen detector - Chalkline or Comskip - to
+find the commercials and writes a .vprj of those cuts into the output folder.
+Which one runs is the editor's setting, not a separate one here: a recording
+should not be detected one way unattended and another way by hand.  It never
+edits or exports the recording - the produced project is a starting point the
+user reviews and confirms in the editor (via the Batch Manager) before
+anything is cut.
 """
 
 import calendar
@@ -23,9 +27,34 @@ import time
 
 from project.edl import parse_edl_cuts
 from project.vprj import save_vprj_from_cuts
+from repair.chalkline import run_chalkline, ChalklineError
 from repair.comskip import run_comskip, ComskipError, pick_comskip_ini
 
 log = logging.getLogger("snipwright.watch")
+
+
+# --------------------------------------------------------------------------- #
+# Detectors
+# --------------------------------------------------------------------------- #
+
+# The two detectors, as stored in the editor's config.  Chalkline is the
+# default everywhere, including when the setting is missing or unreadable.
+DETECTOR_CHALKLINE = "chalkline"
+DETECTOR_COMSKIP = "comskip"
+DEFAULT_DETECTOR = DETECTOR_CHALKLINE
+
+# What to call each one in a log line.  The logs are read when something has
+# gone wrong, and "Comskip failed" is a great deal more use than "detection
+# failed" when only one of the two is even installed.
+DETECTOR_NAMES = {
+    DETECTOR_CHALKLINE: "Chalkline",
+    DETECTOR_COMSKIP: "Comskip",
+}
+
+
+def detector_name(detector):
+    """The display name for a detector key, for logs and status messages."""
+    return DETECTOR_NAMES.get(detector, str(detector))
 
 
 class ProcessResult:
@@ -451,25 +480,69 @@ class ProcessedLog:
 def process_recording(source, comskip_binary, comskip_ini, output_dir,
                       progress_cb=None, cancel_cb=None,
                       save_when_empty=True,
-                      _run_comskip=run_comskip):
-    """Run Comskip on one recording and write a .vprj of the commercials.
+                      detector=DEFAULT_DETECTOR,
+                      _run_comskip=run_comskip,
+                      _run_chalkline=run_chalkline):
+    """Detect the adverts in one recording and write a .vprj of them.
+
+    ``detector`` chooses between Chalkline and Comskip.  The Comskip
+    arguments are kept whichever is chosen - they are simply unused on the
+    Chalkline path, which needs no binary and no .ini - so the injection
+    seams and every existing caller keep working unchanged.
 
     Returns a ProcessResult.  When commercials are found, the project lists
     those cuts.  When none are found and ``save_when_empty`` is true (the
     default), a full-length project with an empty cut list is written anyway, so
     the recording still reaches the Batch Manager ready to review or copy; with
     it false, nothing is written (the old behaviour).  Never raises for a
-    Comskip "no commercials" result; genuine failures are returned as
-    result.error.
+    "no commercials" result from either detector - for Chalkline that is a
+    deliberate answer rather than a failure, and it is the right one on a BBC
+    recording; genuine failures are returned as result.error.
+
+    Chalkline never learns from what happens here.  Learning needs ground
+    truth, and an unattended detection is a guess: teaching Chalkline from
+    its own output would compound whatever it got wrong.  It learns only
+    from a project the user has corrected and saved in the editor.
     """
     tmp_dir = tempfile.mkdtemp(prefix="snipwright-watch-")
     try:
         try:
-            edl_path = _run_comskip(
-                comskip_binary, comskip_ini, source, tmp_dir,
-                progress_cb=progress_cb, cancel_cb=cancel_cb,
-            )
-        except ComskipError as exc:
+            if detector == DETECTOR_CHALKLINE:
+                # run_chalkline hands back (path, info).  The EDL is the
+                # result - the same as Comskip's, which is what keeps one
+                # parsing path below rather than two - but the info says
+                # which technique fired and whether a remembered logo was
+                # used, and an unattended run is exactly where nobody is
+                # watching, so it goes in the log.
+                edl_path, info = _run_chalkline(
+                    source, tmp_dir,
+                    progress_cb=progress_cb, cancel_cb=cancel_cb,
+                )
+                log.info(
+                    "  Chalkline: logo %s brackets, shape %s, sar %s, "
+                    "anchors %s, coincidence %s",
+                    info.get("logo_brackets", 0),
+                    info.get("shape_brackets", 0),
+                    info.get("sar_brackets", 0),
+                    info.get("anchor_brackets", 0),
+                    info.get("coincidence_brackets", 0),
+                )
+                if info.get("mask_brackets"):
+                    log.info(
+                        "  Chalkline: remembered %spx %s logo for %s "
+                        "supplied %s bracket(s)",
+                        info.get("mask_pixels"), info.get("mask_kind"),
+                        info.get("channel"), info["mask_brackets"],
+                    )
+                if info.get("reason"):
+                    log.info("  Chalkline: no breaks reported - %s",
+                             info["reason"])
+            else:
+                edl_path = _run_comskip(
+                    comskip_binary, comskip_ini, source, tmp_dir,
+                    progress_cb=progress_cb, cancel_cb=cancel_cb,
+                )
+        except (ComskipError, ChalklineError) as exc:
             return ProcessResult(source, error=str(exc))
 
         cuts = parse_edl_cuts(edl_path) if edl_path else []
@@ -482,7 +555,7 @@ def process_recording(source, comskip_binary, comskip_ini, output_dir,
 
         # An empty cut list is valid: save_vprj_from_cuts writes a project that
         # keeps the whole recording (no cuts), which is exactly what we want
-        # when Comskip found no commercials.
+        # when the detector found no commercials.
         save_vprj_from_cuts(
             vprj_path, source, cuts,
             duration_seconds=probe_duration(source),
@@ -499,25 +572,37 @@ def process_recording(source, comskip_binary, comskip_ini, output_dir,
 def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
               on_event=None, cancel_cb=None, pause_cb=None,
               ignore_patterns=None, ignore_seen=None,
+              detector=None,
               _process=process_recording):
     """Scan all configured roots once.
 
     on_event(kind, result) is called as work proceeds, with kind one of:
-        "processing" (result.source set, about to run Comskip)
+        "processing" (result.source set, about to run the detector)
         "done"       (a recording was scanned; result has vprj_path/cut_count)
         "skip"       (skipped; result.skipped_reason explains why)
         "error"      (result.error set)
 
-    cancel_cb is a hard stop: it's also passed to Comskip, so the current file
-    is abandoned immediately (used on Quit).  pause_cb is a graceful stop: it's
-    checked only between files, so the file being processed runs to completion
-    and the scan then stops before starting the next one (used on Pause).
+    ``detector`` overrides the editor's setting, for a caller that wants to
+    force one; left None it is read from the shared config, so the Watcher
+    and the editor's Detect Commercials always agree.
+
+    cancel_cb is a hard stop: it's also passed to the detector, so the current
+    file is abandoned immediately (used on Quit).  pause_cb is a graceful stop:
+    it's checked only between files, so the file being processed runs to
+    completion and the scan then stops before starting the next one (used on
+    Pause).
 
     Returns a summary dict with counts.
     """
     cancel_cb = cancel_cb or (lambda: False)
     pause_cb = pause_cb or (lambda: False)
     ignore_patterns = ignore_patterns or []
+    if detector is None:
+        detector = getattr(cfg, "ad_detector", DEFAULT_DETECTOR)
+    name_of_detector = detector_name(detector)
+    # Comskip's paths are read whichever detector is in use.  They cost a
+    # config read and nothing else, and reading them unconditionally keeps
+    # the branch below to one place rather than two.
     if comskip_binary is None or comskip_ini is None:
         comskip_binary, comskip_ini = cfg.comskip_paths()
 
@@ -539,9 +624,10 @@ def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
         seen_dirty = ignore_seen.sync(ignore_patterns)
 
     log.info(
-        "Scan starting: roots=%s, pattern=%s, settle=%ds, %d already on the "
-        "processed list.",
-        cfg.input_roots, cfg.pattern, cfg.settle_seconds, len(processed),
+        "Scan starting: detector=%s, roots=%s, pattern=%s, settle=%ds, %d "
+        "already on the processed list.",
+        name_of_detector, cfg.input_roots, cfg.pattern, cfg.settle_seconds,
+        len(processed),
     )
 
     for source in iter_recordings(cfg.input_roots, cfg.pattern):
@@ -598,22 +684,32 @@ def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
         log.info("Processing: %s", name)
         emit("processing", ProcessResult(source))
         source_ini = comskip_ini
-        if cfg.ini_by_channel:
-            source_ini = pick_comskip_ini(source, comskip_ini)
-        log.info(
-            "  Comskip .ini: %s",
-            os.path.basename(source_ini) if source_ini
-            else "(none - Comskip defaults)",
-        )
+        if detector == DETECTOR_COMSKIP:
+            if cfg.ini_by_channel:
+                source_ini = pick_comskip_ini(source, comskip_ini)
+            log.info(
+                "  Comskip .ini: %s",
+                os.path.basename(source_ini) if source_ini
+                else "(none - Comskip defaults)",
+            )
+        else:
+            # Chalkline has no configuration at all, so there is nothing to
+            # report here beyond which detector is running - and that is
+            # worth saying, because otherwise the log gives no clue why the
+            # Comskip .ini line has vanished.
+            log.info("  Detector: Chalkline (no configuration needed)")
         result = _process(
             source, comskip_binary, source_ini, cfg.output_dir,
             cancel_cb=cancel_cb,
             save_when_empty=cfg.save_when_no_adverts,
+            detector=detector,
         )
 
         if cancel_cb() and result.error:
-            # Cancelled mid-Comskip - don't mark processed, try again next time.
-            log.info("Processing cancelled mid-Comskip: %s", name)
+            # Cancelled mid-detection - don't mark processed, try again next
+            # time.
+            log.info("Processing cancelled mid-%s: %s",
+                     name_of_detector, name)
             break
 
         if result.error:

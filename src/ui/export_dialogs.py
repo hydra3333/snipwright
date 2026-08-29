@@ -201,12 +201,15 @@ class ExportProgressDialog(QDialog):
         if recoding or phase in ("verify", "done"):
             self._scene_label.setText("")
         else:
-            self._scene_label.setText(f"Scene {scene} of {total_scenes}")
+            self._scene_label.setText(
+                self.tr("Scene %(scene)d of %(total)d")
+                % {"scene": scene, "total": total_scenes})
 
         # Estimated time remaining.
         if remaining is not None:
             self._eta_label.setText(
-                f"Estimated time remaining: {_fmt_secs(remaining)}"
+                self.tr("Estimated time remaining: %s")
+                % _fmt_secs(remaining)
             )
         elif percent >= 100:
             self._eta_label.setText(self.tr("Estimated time remaining: done"))

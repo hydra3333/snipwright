@@ -45,21 +45,21 @@ class FilesPage(SettingsPage):
         self.add(_divider())
 
         self._open_row = PathRow(
-            "Opening videos:",
+            self.tr("Opening videos:"),
             p.get("open_mode", "last"),
             p.get("open_folder", ""),
         )
         self.add(self._open_row)
 
         self._export_row = PathRow(
-            "Saving videos:",
+            self.tr("Saving videos:"),
             p.get("export_mode", "last"),
             p.get("export_folder", ""),
         )
         self.add(self._export_row)
 
         self._project_row = PathRow(
-            "Project files:",
+            self.tr("Project files:"),
             p.get("project_mode", "last"),
             p.get("project_folder", ""),
         )

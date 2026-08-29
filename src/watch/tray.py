@@ -1,9 +1,11 @@
 """System-tray front-end for the watcher engine.
 
 A standalone app (its own process) that sits in the system tray, scans the
-configured recording folders on a timer, runs Comskip on anything new, and
-writes a .vprj of the detected commercials into the output folder for the
-Batch Manager to pick up.
+configured recording folders on a timer, detects the adverts in anything new,
+and writes a .vprj of them into the output folder for the Batch Manager to
+pick up.  Which detector it uses is the editor's setting (Settings > Advert
+detection), read through the shared config; the watcher has no separate
+choice of its own.
 
 If the desktop has no usable system tray, it degrades to a normal control
 window instead of failing.
@@ -33,7 +35,7 @@ from watch.config import (
 )
 from watch.engine import (
     scan_once, ProcessedLog, load_ignore_patterns, IgnoreSeenLog,
-    prune_ignore_list, months_between,
+    prune_ignore_list, months_between, DETECTOR_COMSKIP,
 )
 from watch import autostart
 
@@ -598,10 +600,10 @@ class WatchControlDialog(QDialog):
         logs_v.addWidget(config_btn, alignment=Qt.AlignLeft)
         outer.addWidget(logs_box)
 
-        # --- comskip status (set in the editor) ---
-        self.comskip_label = QLabel()
-        self.comskip_label.setWordWrap(True)
-        outer.addWidget(self.comskip_label)
+        # --- detector status (chosen in the editor) ---
+        self.detector_label = QLabel()
+        self.detector_label.setWordWrap(True)
+        outer.addWidget(self.detector_label)
 
         outer.addStretch(1)
 
@@ -627,23 +629,40 @@ class WatchControlDialog(QDialog):
         self.scan_launch_chk.setChecked(self.cfg.scan_on_launch)
         self.save_no_ads_chk.setChecked(self.cfg.save_when_no_adverts)
         self._refresh_pause_button()
-        self._refresh_comskip_label()
+        self._refresh_detector_label()
 
-    def _refresh_comskip_label(self):
+    def _refresh_detector_label(self):
+        """Say which detector will run, and warn only when it needs setting up.
+
+        Chalkline needs nothing, so there is nothing to warn about; the
+        warning below belongs to Comskip alone.  Showing it regardless was
+        the old behaviour and would now be simply wrong - it would tell a
+        Chalkline user to go and install a program they will never use.
+        """
+        if self.cfg.ad_detector != DETECTOR_COMSKIP:
+            self.detector_label.setText(
+                self.tr("Detector: Chalkline (built in - nothing to set up). "
+                "Change it in the Snipwright editor → Settings → Advert "
+                "detection.")
+            )
+            self.detector_label.setStyleSheet("")
+            return
+
         binary, ini = self.cfg.comskip_paths()
         if binary and os.path.isfile(binary):
-            self.comskip_label.setText(
+            self.detector_label.setText(
                 self.tr("Comskip: %s") % binary
                 + (self.tr("\nIni: %s") % ini if ini else "")
             )
-            self.comskip_label.setStyleSheet("")
+            self.detector_label.setStyleSheet("")
         else:
-            self.comskip_label.setText(
+            self.detector_label.setText(
                 self.tr("⚠ Comskip isn't set. Open the Snipwright editor → Settings and "
-                "set the Comskip program (and .ini); the watcher reads it from "
-                "there.")
+                "set the Comskip program (and .ini), or switch to Chalkline "
+                "there - it is built in and needs no setup. The watcher reads "
+                "the choice from there.")
             )
-            self.comskip_label.setStyleSheet("color: #b03030;")
+            self.detector_label.setStyleSheet("color: #b03030;")
 
     def _refresh_pause_button(self):
         self.pause_btn.setText(self.tr("Resume") if self.cfg.paused else self.tr("Pause"))
@@ -790,15 +809,20 @@ class WatcherTray:
     def scan_now(self):
         if self.worker is not None:
             return  # already scanning
-        binary, _ini = self.cfg.comskip_paths()
-        if not binary or not os.path.isfile(binary):
-            self._set_status(
-                self.tr("Comskip isn't set - open Settings and configure it in the "
-                "editor first.")
-            )
-            if self.dialog is None:
-                self.open_settings()
-            return
+        # Only Comskip needs something installed.  This check must never run
+        # for Chalkline, or selecting the built-in detector would leave the
+        # watcher refusing to scan and reopening Settings at every timer tick
+        # - the same trap the editor's Ctrl+A had before it was fixed.
+        if self.cfg.ad_detector == DETECTOR_COMSKIP:
+            binary, _ini = self.cfg.comskip_paths()
+            if not binary or not os.path.isfile(binary):
+                self._set_status(
+                    self.tr("Comskip isn't set - open Settings and configure it in the "
+                    "editor first, or switch to Chalkline there.")
+                )
+                if self.dialog is None:
+                    self.open_settings()
+                return
 
         self.worker = WatchScanWorker(self.cfg)
         self.worker.event.connect(self._on_event)

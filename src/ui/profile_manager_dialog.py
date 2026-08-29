@@ -69,6 +69,7 @@ _VIDEO = [
 _AUDIO = [
     (QT_TRANSLATE_NOOP("ProfileEditor", "Smart copy (lossless)"), "copy"),
     (QT_TRANSLATE_NOOP("ProfileEditor", "Re-encode to AAC"), "aac"),
+    (QT_TRANSLATE_NOOP("ProfileEditor", "No audio (silent)"), "none"),
 ]
 _ASPECT = [
     (QT_TRANSLATE_NOOP("ProfileEditor", "Source"), "source"),
@@ -657,16 +658,49 @@ class ProfileEditDialog(QDialog):
         and its default applied, so a 5.1 DTS-HD track could be folded down to
         a rather thin 130 kbps without the setting that governs it being
         reachable.
+
+        "No audio" overrides all of it: there is no track left to give a
+        bitrate, fold down or level, so every audio control below is greyed
+        rather than left offering settings that cannot apply.
+
+        Every widget is looked up with getattr rather than touched directly.
+        __init__ calls _on_level_changed() partway through construction - to
+        set the loudness box's range before its value - and that calls this,
+        so half these widgets do not exist yet the first time it runs.  The
+        getattr on level_combo below was already here for that reason; the
+        rest now follow it.
         """
+        silent = self.audio_combo.currentData() == "none"
+        for name in ("downmix_combo", "level_combo", "level_spin",
+                     "sync_spin"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setEnabled(not silent)
+        if silent:
+            bitrate = getattr(self, "bitrate_combo", None)
+            if bitrate is not None:
+                bitrate.setEnabled(False)
+            return
+
         level = getattr(self, "level_combo", None)
+        downmix = getattr(self, "downmix_combo", None)
         encodes_aac = (
             self.audio_combo.currentData() == "aac"
-            or self.downmix_combo.currentData() == "stereo"
+            or (downmix is not None and downmix.currentData() == "stereo")
             # Any loudness processing re-encodes every track, so the bitrate
             # governs the result just as much as it does for a downmix.
             or (level is not None and level.currentData() != "none")
         )
-        self.bitrate_combo.setEnabled(encodes_aac)
+        bitrate = getattr(self, "bitrate_combo", None)
+        if bitrate is not None:
+            bitrate.setEnabled(encodes_aac)
+        # Re-apply what the loudness mode says about its own value box, which
+        # the blanket enable above has just overridden.  Done inline rather
+        # than by calling _on_level_changed(), which calls back into this
+        # method - the two would recurse into each other without end.
+        spin = getattr(self, "level_spin", None)
+        if level is not None and spin is not None:
+            spin.setEnabled(level.currentData() in ("normalise", "gain"))
 
     def _choose_dir(self):
         start = self.dir_edit.text().strip() or ""

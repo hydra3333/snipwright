@@ -1010,10 +1010,26 @@ def _run_smartcut(source_path, out_path, segments, n_audio, keep_ranges, fps,
             )
             return n_written
     except Exception:
-        logger.exception("smartcut: first attempt raised")
+        # Warning rather than exception(), which logs at ERROR.  A retry
+        # follows immediately and usually succeeds, so this is a recoverable
+        # step in a working export, not a failure - and a full ERROR
+        # traceback in the log sends the reader hunting for a fault that the
+        # next two lines have already dealt with.  The traceback is still
+        # recorded in full: the commonest cause is a parameterless audio
+        # track that avformat_write_header rejects with EINVAL, and knowing
+        # that is what makes the completion message correct.
+        logger.warning("smartcut: first attempt raised", exc_info=True)
 
     # Already down to the primary track only - nothing more to drop.
     if n_written <= 1:
+        if n_audio == 0:
+            # A silent export asked for no tracks at all, so "retry with
+            # fewer" has nothing to offer and the usual message would send
+            # the user looking at audio that was never involved.
+            raise ExportError(
+                "Export failed while writing a silent file. The source "
+                "video stream may need repairing first."
+            )
         raise ExportError(
             "Export failed even with a single audio track. The source stream "
             "may need repairing first."
@@ -1685,7 +1701,7 @@ def _audio_codec_names(path):
 def _transcode_to_mp4(
         ts_path, mp4_path, video_codec, interlaced,
         total_seconds=0.0, phase="recode_audio", progress_cb=None,
-        cancel_cb=None, ad_source=None,
+        cancel_cb=None, ad_source=None, drop_audio=False,
 ):
     """Convert the freshly-cut .ts into an .mp4.
 
@@ -1749,7 +1765,14 @@ def _transcode_to_mp4(
     # AAC can exceed what a well-encoded source was already using.
     MP4_NATIVE_AUDIO = ("aac", "eac3", "ac3", "mp3", "alac", "opus", "flac")
     src_audio = {name for _idx, name in _audio_codec_names(ts_path)}
-    if src_audio and src_audio.issubset(set(MP4_NATIVE_AUDIO)):
+    if drop_audio:
+        # A silent export: the cut file already has no audio, so -an is
+        # belt and braces.  It also skips the metadata work below, which
+        # probes the source for dispositions and languages that no longer
+        # have a track to belong to.
+        logger.info("MP4: writing a silent file (no audio).")
+        cmd += ["-an"]
+    elif src_audio and src_audio.issubset(set(MP4_NATIVE_AUDIO)):
         logger.info("MP4: copying the audio as-is (%s).",
                     ", ".join(sorted(src_audio)))
         cmd += ["-c:a", "copy"]
@@ -1765,15 +1788,16 @@ def _transcode_to_mp4(
     # a label, so for an audio-description track we ALSO set the handler name
     # (the only thing MP4 players show as a track label) to "visual impaired".
     # Other tracks get no name - matching the source, which names nothing.
-    cmd += _ffmpeg_audio_meta_args(ad_source or ts_path, skip=dead_audio)
-    out_pos = 0
-    for i, info in enumerate(_source_audio_meta(ad_source or ts_path)):
-        if i in dead_audio:
-            continue
-        if "visual_impaired" in info["dispositions"]:
-            cmd += ["-metadata:s:a:%d" % out_pos,
-                    "handler_name=visual impaired"]
-        out_pos += 1
+    if not drop_audio:
+        cmd += _ffmpeg_audio_meta_args(ad_source or ts_path, skip=dead_audio)
+        out_pos = 0
+        for i, info in enumerate(_source_audio_meta(ad_source or ts_path)):
+            if i in dead_audio:
+                continue
+            if "visual_impaired" in info["dispositions"]:
+                cmd += ["-metadata:s:a:%d" % out_pos,
+                        "handler_name=visual impaired"]
+            out_pos += 1
     cmd += [
         "-movflags", "+faststart",
         "-f", "mp4",
@@ -3063,6 +3087,20 @@ def export_ranges(
 
     source = MediaContainer(source_path)
     n_audio = len(source.audio_tracks)
+    # "No audio" is handled by never offering the tracks to the cutter, rather
+    # than by stripping them afterwards.  Everything downstream keys off
+    # n_audio - which tracks smartcut passes through, whether a rebuild is
+    # needed, what mkvmerge is told to mux, and how many tracks the summary
+    # reports as dropped - so zeroing it here means one change instead of a
+    # special case in each of them.  It also makes the drop deliberate: a
+    # track never offered cannot be counted as lost.
+    silent_output = audio_mode == "none"
+    if silent_output:
+        logger.info(
+            "Profile audio: none - writing a silent file, leaving %d source "
+            "track%s behind.", n_audio, "" if n_audio == 1 else "s",
+        )
+        n_audio = 0
     segments = ranges_to_segments(source, keep_ranges, frame_index)
 
     fps = frame_index.fps or 25.0
@@ -3472,6 +3510,7 @@ def export_ranges(
                 progress_cb=progress_cb,
                 cancel_cb=cancel_cb,
                 ad_source=source_path,
+                drop_audio=silent_output,
             )
         else:
             # Plain .ts delivery (cut_target IS out_path).  Fix the packet
@@ -3757,13 +3796,30 @@ def export_ranges(
             phantom = _empty_audio_tracks(source_path)
         except Exception:
             phantom = 0
-        if audio_drop_reason.get("failed"):
-            # Checked before every other branch.  The remaining cases all
-            # explain a track that was left out on purpose and cost nothing;
-            # this one was lost because the export could not write it, and
-            # saying "nothing was lost" about that is worse than saying
-            # nothing at all.  It is reported as an error rather than a
-            # footnote so it appears at the top of the dialog.
+        # A track that carries nothing in the kept scenes is the empty case
+        # whether or not the muxer also refused it.  Checked here rather than
+        # in the branch order below, because "failed" used to win outright and
+        # the silent finding - already computed, a few lines up - was
+        # discarded: a Charmed export reported "the audio is present in the
+        # recording" about a description track that held nothing at all
+        # within the programme.  The write failure is a *consequence* of an
+        # empty, parameterless track, not an independent loss.
+        empty_here = bool(silent_here and dropped <= silent_here)
+        if audio_drop_reason.get("failed") and empty_here:
+            logger.info(
+                "The dropped audio track could not be muxed, but carries no "
+                "audio within the kept scenes either - reported as empty "
+                "rather than as a fault."
+            )
+
+        if audio_drop_reason.get("failed") and not empty_here:
+            # Checked before every other branch, but only once the track is
+            # known to have held something worth keeping.  The remaining
+            # cases all explain a track that was left out on purpose and cost
+            # nothing; this one was lost because the export could not write
+            # it, and saying "nothing was lost" about that is worse than
+            # saying nothing at all.  It is reported as an error rather than
+            # a footnote so it appears at the top of the dialog.
             errors.append((
                 "%d audio track%s could not be written" % (dropped, plural),
                 "The export could not write %s audio track%s and completed "
@@ -3774,7 +3830,7 @@ def export_ranges(
                 % ("an" if dropped == 1 else "%d" % dropped, plural,
                    "it" if dropped == 1 else "them"),
             ))
-        elif silent_here and dropped <= silent_here:
+        elif empty_here:
             # Checked first, and deliberately ahead of the SBR case below: a
             # description track is usually both HE-AAC *and* silent across the
             # kept scenes, and the SBR branch used to win, reporting a track

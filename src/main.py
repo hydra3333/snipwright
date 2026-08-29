@@ -347,6 +347,10 @@ class MainWindow(QMainWindow):
         # to "Save Project As".
         self.current_project_path = None
 
+        # Background logo learning, when a save has started one.  None when
+        # nothing is running; see _maybe_learn_logo().
+        self._learn_worker = None
+
         # The joiner list (segments to be joined into one video).  Persists for
         # the lifetime of the window; edited via the Joiner menu.
         from project.joiner import JoinerList
@@ -1513,9 +1517,10 @@ class MainWindow(QMainWindow):
         added = len(keep)
         total = len(self.joiner_list)
         self.statusBar().showMessage(
-            "Added %d scene%s from %s (%d in joiner list)."
-            % (added, "" if added == 1 else "s",
-               os.path.basename(source), total), 5000)
+            self.tr("Added %(count)d scene(s) from %(name)s "
+                    "(%(total)d in joiner list).")
+            % {"count": added, "name": os.path.basename(source),
+               "total": total}, 5000)
 
         self.info_panel.update_info()
 
@@ -1673,7 +1678,8 @@ class MainWindow(QMainWindow):
         def on_done(path):
             progress.close()
             self.statusBar().showMessage(
-                "Joined video created: %s" % (os.path.basename(path),), 6000)
+                self.tr("Joined video created: %s")
+                % os.path.basename(path), 6000)
             if clear_after:
                 self.joiner_list.clear()
             QMessageBox.information(
@@ -1784,10 +1790,14 @@ class MainWindow(QMainWindow):
         return None
 
     def detect_commercials(self):
-        """Run Comskip on the open file and populate the timeline with the
-        detected scenes (commercial breaks removed)."""
-        from repair.comskip import ComskipWorker
+        """Detect the advert breaks in the open file and populate the
+        timeline with the scenes that remain.
 
+        Which detector runs is the user's choice (Settings > Advert
+        detection), and it is the same choice the Watcher obeys.  Both
+        workers hand back the path to an EDL, so everything past the
+        construction below is shared between them.
+        """
         if not self.frames or self.index is None:
             QMessageBox.information(
                 self,
@@ -1796,36 +1806,61 @@ class MainWindow(QMainWindow):
             )
             return
 
-        binary = self.config.get("paths", {}).get("comskip_binary", "")
-        ini = self.config.get("paths", {}).get("comskip_ini", "")
+        detector = str(
+            self.config.get("settings", {}).get("ad_detector", "chalkline")
+        ).lower()
 
-        # Same per-channel .ini selection the Watcher uses (Settings > External
-        # tools), matched against the open recording's filename.
-        if self.config.get("paths", {}).get("comskip_ini_by_channel", False):
-            from repair.comskip import pick_comskip_ini
-            picked = pick_comskip_ini(self.current_filename, ini)
-            if picked != ini:
-                log.info(
-                    "Detect Commercials: using channel Comskip .ini: %s",
-                    os.path.basename(picked),
+        if detector == "comskip":
+            from repair.comskip import ComskipWorker
+
+            name = "Comskip"
+            binary = self.config.get("paths", {}).get("comskip_binary", "")
+            ini = self.config.get("paths", {}).get("comskip_ini", "")
+
+            # Same per-channel .ini selection the Watcher uses (Settings >
+            # Advert detection), matched against the open recording's
+            # filename.
+            if self.config.get("paths", {}).get("comskip_ini_by_channel",
+                                                False):
+                from repair.comskip import pick_comskip_ini
+                picked = pick_comskip_ini(self.current_filename, ini)
+                if picked != ini:
+                    log.info(
+                        "Detect Commercials: using channel Comskip .ini: %s",
+                        os.path.basename(picked),
+                    )
+                ini = picked
+
+            # Only Comskip needs something installed.  This check must never
+            # run for Chalkline: it is built in, and the people who have
+            # never installed Comskip are exactly the ones Chalkline is there
+            # for.
+            if not binary or not os.path.isfile(binary):
+                QMessageBox.information(
+                    self,
+                    self.tr("Detect Commercials"),
+                    self.tr("The Comskip program hasn't been set yet.\n\n"
+                    "Add the path to Comskip (and optionally its .ini file) "
+                    "in Tools > Settings > Advert detection, or switch to "
+                    "Chalkline there - it is built in and needs no setup."),
                 )
-            ini = picked
+                return
 
-        if not binary or not os.path.isfile(binary):
-            QMessageBox.information(
-                self,
-                self.tr("Detect Commercials"),
-                self.tr("The Comskip program hasn't been set yet.\n\n"
-                "Add the path to Comskip (and optionally its .ini file) in "
-                "Tools > Settings > Folders, then try again."),
-            )
-            return
+            def make_worker():
+                return ComskipWorker(binary, ini, self.current_filename, self)
+        else:
+            from repair.chalkline_worker import ChalklineWorker
+
+            name = "Chalkline"
+
+            def make_worker():
+                return ChalklineWorker(self.current_filename, self)
 
         if self.selection.ranges:
             confirm = QMessageBox.question(
                 self,
                 self.tr("Detect Commercials"),
-                self.tr("This will replace your current scene markers with Comskip's "
+                self.tr("This will replace your current scene markers with the "
                 "detected scenes. Continue?"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
@@ -1834,7 +1869,7 @@ class MainWindow(QMainWindow):
                 return
 
         progress = QProgressDialog(
-            self.tr("Detecting commercials (Comskip)…"),
+            self.tr("Detecting commercials (%s)…") % name,
             self.tr("Cancel"),
             0,
             100,
@@ -1849,7 +1884,7 @@ class MainWindow(QMainWindow):
         # message arrived truncated *and* made the dialog jump wider partway
         # through detection.  Measuring the text rather than hard-coding a
         # width keeps this right in German too, where the string is longer.
-        widest = self.tr("Detecting commercials (Comskip) - pass %s…") % 8
+        widest = self.tr("Detecting commercials (%s) - pass %s…") % (name, 8)
         margin = 80        # dialog margins, plus room for a wider pass number
         progress.setMinimumWidth(
             progress.fontMetrics().horizontalAdvance(widest) + margin
@@ -1857,22 +1892,25 @@ class MainWindow(QMainWindow):
 
         progress.setValue(0)
 
-        worker = ComskipWorker(binary, ini, self.current_filename, self)
-        self._comskip_worker = worker
+        worker = make_worker()
+        self._detect_worker = worker
 
-        def _on_comskip_progress(pct, pass_no):
-            # Comskip rescans a file from the beginning when it cannot settle
-            # on a logo, so the bar legitimately drops back to 0 partway
-            # through - one Sky Mix recording took three passes.  Naming the
-            # pass keeps that from reading as a crash and restart.
+        def _on_detect_progress(pct, pass_no):
+            # Both detectors report a percentage that restarts partway
+            # through, for different reasons: Comskip rescans a file from the
+            # beginning when it cannot settle on a logo - one Sky Mix
+            # recording took three passes - and Chalkline runs two or three
+            # separate passes over the recording by design.  Either way the
+            # bar legitimately drops back to 0, and naming the pass keeps
+            # that from reading as a crash and restart.
             if pass_no > 1:
                 progress.setLabelText(
-                    self.tr("Detecting commercials (Comskip) - pass %s…")
-                    % pass_no
+                    self.tr("Detecting commercials (%s) - pass %s…")
+                    % (name, pass_no)
                 )
             progress.setValue(pct)
 
-        worker.progress.connect(_on_comskip_progress)
+        worker.progress.connect(_on_detect_progress)
 
         def _done(edl_path):
             from project.edl import load_edl
@@ -1883,21 +1921,24 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(
                     self,
                     self.tr("Detect Commercials"),
-                    self.tr("Comskip finished but its output could not be read:\n\n%s") % exc,
+                    self.tr("%s finished but its output could not be read:"
+                            "\n\n%s") % (name, exc),
                 )
                 worker.cleanup()
-                self._comskip_worker = None
+                self._detect_worker = None
                 return
 
             worker.cleanup()
-            self._comskip_worker = None
+            self._detect_worker = None
+
+            self._log_detection_info(name, getattr(worker, "info", None))
 
             if not keep_ranges:
                 QMessageBox.information(
                     self,
                     self.tr("Detect Commercials"),
-                    self.tr("Comskip found no commercials to remove (the whole file "
-                    "is one scene)."),
+                    self.tr("%s found no commercials to remove (the whole "
+                            "file is one scene).") % name,
                 )
                 return
 
@@ -1909,13 +1950,14 @@ class MainWindow(QMainWindow):
             self.goto_frame(keep_ranges[0][0])
 
             self.statusBar().showMessage(
-                f"Comskip found {len(keep_ranges)} scene(s)."
+                self.tr("%(detector)s found %(count)d scene(s).")
+                % {"detector": name, "count": len(keep_ranges)}
             )
 
         def _fail(message):
             progress.close()
             worker.cleanup()
-            self._comskip_worker = None
+            self._detect_worker = None
             QMessageBox.warning(
                 self,
                 self.tr("Detect Commercials"),
@@ -1934,14 +1976,179 @@ class MainWindow(QMainWindow):
             self,
             self.tr("Import Project"),
             start,
-            "VideoReDo Project (*.vprj *.VPRJ);;All files (*)",
+            # .VPrj is included because that is the case Comskip actually
+            # writes, and it matched neither of the two globs listed here
+            # before - so the files this is most often pointed at were the
+            # ones it could not see.
+            "Projects and cut lists (*.vprj *.VPrj *.VPRJ *.edl *.EDL)"
+            ";;Snipwright Project (*.vprj *.VPrj *.VPRJ)"
+            ";;EDL cut list (*.edl *.EDL)"
+            ";;All files (*)",
         )
 
         if not path:
             return
 
         self._remember_dir("project", path)
-        self.load_project_file(path, "Import Project")
+        if path.lower().endswith(".edl"):
+            self.load_edl_file(path, "Import EDL")
+        else:
+            self.load_project_file(path, "Import Project")
+
+    def load_edl_file(self, path, title="Import EDL"):
+        """Apply an EDL's cut list to a video.
+
+        An EDL carries no reference to the recording it describes - it is only
+        a list of times - so unlike a .vprj it cannot name its own video.  If
+        one is already open the cuts are applied to it; if not, the user is
+        offered the same "locate the video" prompt a project gets when its
+        source has moved, rather than the XML parse error this used to fail
+        with.
+
+        The EDL is deliberately *not* remembered as the current project.  It
+        is an interchange format, not a project: it carries no markers and no
+        source path, so letting Ctrl+P overwrite it would quietly replace the
+        user's work with a lossy copy of it.
+        """
+        from project.edl import load_edl, parse_edl_cuts
+
+        self.raise_()
+        self.activateWindow()
+
+        # Read the cut list before touching the editor, so a malformed file
+        # fails before anything has been discarded.
+        try:
+            cuts = parse_edl_cuts(path)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr(title),
+                self.tr("This EDL could not be read:\n\n%s") % exc,
+            )
+            return False
+
+        if not cuts:
+            QMessageBox.information(
+                self,
+                self.tr(title),
+                self.tr("This EDL contains no cut regions, so there is "
+                        "nothing to apply."),
+            )
+            return False
+
+        if not self._confirm_discard_changes(title):
+            return False
+
+        have_video = bool(self.frames) and self.index is not None
+
+        if not have_video:
+            choice = QMessageBox.question(
+                self,
+                self.tr("Locate video file"),
+                self.tr(
+                    "An EDL contains only a cut list, not a video.\n"
+                    "It has to be applied to a recording that is already "
+                    "open.\n\n"
+                    "EDL: %s\n\n"
+                    "Do you wish to select the video it applies to?"
+                ) % os.path.basename(path),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if choice != QMessageBox.Yes:
+                return False
+
+            # Open the picker beside the EDL - a detector writes its output
+            # next to the recording it analysed, so that is the likeliest
+            # place to find it.
+            start_dir = os.path.dirname(path)
+            if not os.path.isdir(start_dir):
+                start_dir = self._start_dir("open")
+
+            source, _ = QFileDialog.getOpenFileName(
+                self,
+                self.tr("Locate video for EDL"),
+                start_dir,
+                VIDEO_OPEN_FILTER,
+            )
+            if not source:
+                return False
+
+            self._pending_after_load = lambda new_index: self._apply_edl(
+                path, new_index, title)
+            self.original_source = source
+            self._load_file(source)
+            return True
+
+        self._apply_edl(path, self.index, title)
+        return True
+
+    def _apply_edl(self, path, index, title="Import EDL"):
+        """Map an EDL onto an index and make its kept ranges the selection."""
+        from project.edl import (describe_mismatch, load_edl,
+                                 parse_edl_cuts)
+
+        # An EDL has no source reference, so nothing stops it being applied to
+        # the wrong recording - and the result looks plausible rather than
+        # broken.  A cut running past the end of the video is the one cheap
+        # sign of that, so say so rather than silently clamping it.
+        cuts = parse_edl_cuts(path)
+        duration = index.seconds_of(index.frame_count - 1)
+        overrun = max((end for _start, end in cuts), default=0.0) - duration
+        if overrun > 1.0:
+            choice = QMessageBox.question(
+                self,
+                self.tr(title),
+                self.tr(
+                    "This EDL runs %(over)s seconds past the end of the "
+                    "video.\n\nIt was probably made from a different "
+                    "recording. Apply it anyway?"
+                ) % {"over": f"{overrun:.1f}"},
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if choice != QMessageBox.Yes:
+                return False
+
+        try:
+            keep_ranges, _markers = load_edl(path, index)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr(title),
+                self.tr("This EDL could not be applied:\n\n%s") % exc,
+            )
+            return False
+
+        if not keep_ranges:
+            QMessageBox.information(
+                self,
+                self.tr(title),
+                self.tr("This EDL removes the whole recording, so there "
+                        "would be nothing left to keep."),
+            )
+            return False
+
+        # State both spans.  No check can be certain an EDL belongs to the
+        # video it is applied to, so where certainty is impossible the next
+        # best thing is to put the numbers in front of the user.
+        last = max(end for _start, end in cuts)
+
+        self.selection.ranges = list(keep_ranges)
+        self.scenes.markers = []
+        self._refresh_scenes_from_selection()
+        self.goto_frame(keep_ranges[0][0])
+
+        self.statusBar().showMessage(
+            self.tr("EDL loaded: %(name)s - %(cuts)d cut regions to "
+                    "%(last).1fs of a %(duration).1fs video")
+            % {"name": os.path.basename(path), "cuts": len(cuts),
+               "last": last, "duration": duration}
+        )
+        # Not _mark_saved(): the cuts have been imported onto the video but
+        # nothing has been saved as a project yet, and current_project_path is
+        # left alone so Ctrl+P still means "save a .vprj".
+        return True
 
     def load_project_file(self, path, title="Import Project", remember=True):
         """Load a saved .vprj into the editor and make it the current project
@@ -2031,7 +2238,7 @@ class MainWindow(QMainWindow):
                 self.goto_frame(data.keep_ranges[0][0])
 
             self.statusBar().showMessage(
-                f"Project loaded: {os.path.basename(path)}"
+                self.tr("Project loaded: %s") % os.path.basename(path)
             )
 
             # Remember this as the current project so "Save Project" (Ctrl+P)
@@ -2100,9 +2307,10 @@ class MainWindow(QMainWindow):
         self.current_project_path = path
         self._remember_dir("project", path)
         self.statusBar().showMessage(
-            f"Project saved: {os.path.basename(path)}"
+            self.tr("Project saved: %s") % os.path.basename(path)
         )
         self._mark_saved()
+        self._maybe_learn_logo(path)
         return True
 
     def _autosave_project_on_export(self):
@@ -2139,10 +2347,146 @@ class MainWindow(QMainWindow):
             self.current_project_path = path
             self._remember_dir("project", path)
             self.statusBar().showMessage(
-                f"Project saved: {os.path.basename(path)}"
+                self.tr("Project saved: %s") % os.path.basename(path)
             )
         except Exception:
             pass
+        else:
+            # An edit the user has just exported is the most trustworthy
+            # ground truth there is - they backed it with a render.  Outside
+            # the try, so a fault in learning can never be mistaken for the
+            # autosave having failed.
+            self._maybe_learn_logo(path)
+
+    def _log_detection_info(self, name, info):
+        """Record what the detector actually did, not just what it found.
+
+        The command line prints this and the GUI threw it away, which left no
+        way to tell a break found by a remembered logo from one found by the
+        corner search - and therefore no way to tell whether learning a logo
+        had made any difference at all. The same question the log below
+        answers for the Watcher.
+        """
+        if not info:
+            return
+        log.info(
+            "%s: logo %s brackets, shape %s, sar %s, anchors %s, "
+            "coincidence %s",
+            name,
+            info.get("logo_brackets", 0), info.get("shape_brackets", 0),
+            info.get("sar_brackets", 0), info.get("anchor_brackets", 0),
+            info.get("coincidence_brackets", 0),
+        )
+        if info.get("mask_brackets"):
+            log.info(
+                "  remembered %spx %s logo supplied %s bracket(s)",
+                info.get("mask_pixels"), info.get("mask_kind"),
+                info["mask_brackets"],
+            )
+        elif info.get("mask_pixels"):
+            log.info(
+                "  remembered %spx %s logo was found but supplied no brackets",
+                info.get("mask_pixels"), info.get("mask_kind"),
+            )
+        if info.get("reason"):
+            log.info("  no breaks reported: %s", info["reason"])
+
+    def _maybe_learn_logo(self, vprj_path):
+        """Teach Chalkline this channel's logo from the project just saved.
+
+        Runs only for an edit a person made and saved.  Learning from an
+        unattended detection would teach Chalkline from its own guesses, so
+        the Watcher never calls this - see process_recording() in
+        watch/engine.py.
+
+        Silent by design.  The user asked to save a project, not to train a
+        detector, so nothing here may block them, prompt them, or fail
+        loudly.  Most saves teach it nothing and that is the expected
+        outcome, not a fault worth reporting.
+        """
+        settings = self.config.get("settings", {})
+        if str(settings.get("ad_detector", "chalkline")).lower() != "chalkline":
+            return
+        if not settings.get("chalkline_learn", True):
+            return
+        if not self.current_filename or not vprj_path:
+            return
+        if not vprj_path.lower().endswith(".vprj"):
+            return
+        # One at a time.  Learning decodes the whole recording, and starting
+        # a second pass because the user pressed Ctrl+P twice would double
+        # the load for no gain.
+        if getattr(self, "_learn_worker", None) is not None:
+            return
+
+        try:
+            from repair.chalkline_worker import ChalklineLearnWorker
+        except Exception:
+            log.debug("Chalkline learning unavailable", exc_info=True)
+            return
+
+        worker = ChalklineLearnWorker(self.current_filename, vprj_path, self)
+        self._learn_worker = worker
+        worker.started_learning.connect(self._on_learn_started)
+        worker.finished_learning.connect(self._on_learn_finished)
+        worker.finished.connect(self._clear_learn_worker)
+        worker.start()
+
+    def _clear_learn_worker(self):
+        self._learn_worker = None
+
+    def _on_learn_started(self, channel):
+        """Say that learning has begun, not just that it finished.
+
+        The decode takes minutes, and the finishing message therefore arrives
+        long after the save that caused it with nothing to explain where it
+        came from - twice now that has read as nothing having happened. This
+        fires only once the cheap guards have passed, so an ordinary save
+        that will teach it nothing stays silent.
+        """
+        log.info("Chalkline is learning %s's logo in the background.", channel)
+        self.statusBar().showMessage(
+            self.tr("Project saved. Chalkline is learning %s's logo in the "
+                    "background - this takes a few minutes.") % channel,
+            15000,
+        )
+
+    def _on_learn_finished(self, info):
+        """Report what learning made of the saved project - quietly.
+
+        A learned logo is worth one line in the status bar: it changes how
+        the next recording from that channel is detected, so silence would
+        make that improvement look like luck.  Everything else goes to the
+        log only.
+        """
+        if info.get("error"):
+            log.warning("Chalkline could not learn from this project: %s",
+                        info["error"])
+            return
+        if info.get("learned"):
+            channel = info.get("channel", "this channel")
+            kind = info.get("kind") or ""
+            log.info(
+                "Chalkline learned %s %s logo for %s: %d pixels, contrast %s",
+                "an" if kind[:1].lower() in ("a", "e", "i", "o", "u")
+                else "a", kind, channel,
+                info["learned"], info.get("contrast"),
+            )
+            # Fifteen seconds rather than the usual few.  This arrives
+            # minutes after the save that caused it, with nothing to warn
+            # the user it is coming, so a message timed for something they
+            # were watching for is far too brief.
+            self.statusBar().showMessage(
+                self.tr("Chalkline learned %s's logo from your edit - "
+                        "detection on this channel should improve.")
+                % channel,
+                15000,
+            )
+            return
+        log.info("Chalkline learned nothing from this project: %s",
+                 info.get("skipped", "no reason given"))
+        for line in info.get("report", []):
+            log.debug("  %s", line)
 
     def save_project(self):
         """Save to the current project file without prompting (VRD's Ctrl+P).
@@ -2173,20 +2517,66 @@ class MainWindow(QMainWindow):
                 start = os.path.dirname(self.current_filename)
             suggested = os.path.join(start, f"{base}.vprj")
 
-        path, _ = QFileDialog.getSaveFileName(
+        path, chosen = QFileDialog.getSaveFileName(
             self,
             self.tr("Save Project As"),
             suggested,
-            "VideoReDo Project (*.vprj)",
+            "Snipwright Project (*.vprj);;EDL cut list (*.edl)",
         )
 
         if not path:
             return False
 
+        # Export rather than save.  An EDL holds cut times and nothing else,
+        # so it is offered here as a second format instead of as its own menu
+        # entry - but it does not become the current project, because saving
+        # to it again from Ctrl+P would drop the markers silently.
+        wants_edl = (
+            "*.edl" in (chosen or "")
+            or (not chosen and path.lower().endswith(".edl"))
+        )
+        if wants_edl:
+            if not path.lower().endswith(".edl"):
+                path += ".edl"
+            return self._write_edl(path, "Save Project As")
+
         if not path.lower().endswith(".vprj"):
             path += ".vprj"
 
         return self._write_project(path, "Save Project As")
+
+    def _write_edl(self, path, title):
+        """Write the current kept ranges out as an EDL cut list."""
+        from project.edl import save_edl
+
+        if self.scenes.markers:
+            choice = QMessageBox.question(
+                self,
+                self.tr(title),
+                self.tr(
+                    "An EDL stores cut times only, so the %(count)s "
+                    "marker(s) in this project will not be saved.\n\n"
+                    "Continue?"
+                ) % {"count": len(self.scenes.markers)},
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if choice != QMessageBox.Yes:
+                return False
+
+        try:
+            save_edl(path, self.selection.ranges, self.index)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr(title),
+                self.tr("The EDL could not be written:\n\n%s") % exc,
+            )
+            return False
+
+        self.statusBar().showMessage(
+            self.tr("EDL saved: %s") % os.path.basename(path))
+        return True
 
     def restore_default_window_size(self):
         """Un-maximise (if needed) and resize the window to the built-in
@@ -2552,13 +2942,19 @@ class MainWindow(QMainWindow):
         return gone, freed
 
     def _qsf_temp_path(self, ext):
-        """A /tmp path named '<original> - QSF<ext>' for an internal QSF working
+        """A path named '<original> - QSF<ext>' for an internal QSF working
         copy.  Guards the collisions that matter - it never returns the path of
         the file that's currently open (which a re-QSF would clobber), nor of
-        one a background export is still reading."""
-        import tempfile
+        one a background export is still reading.
+
+        The folder comes from qsf_temp.temp_dir(), not tempfile directly, so
+        the configured Quick Stream Fix folder is honoured here as well as by
+        the cleanup that lists and deletes these files.  Those two must agree
+        or the sweep would tidy one folder while the editor filled another.
+        """
+        from utils.qsf_temp import temp_dir
         name = f"{self._original_base()} - QSF{ext}"
-        path = os.path.join(tempfile.gettempdir(), name)
+        path = os.path.join(temp_dir(), name)
         # Track what we create so it can be removed when the editor closes -
         # these are whole video files, and Windows never clears its temp folder.
         if not hasattr(self, "_qsf_temps"):
@@ -2700,8 +3096,9 @@ class MainWindow(QMainWindow):
                 + "\n\n" + "\n".join(failed))
         if added:
             self.statusBar().showMessage(
-                "Added %d file%s to the joiner list (%d entries)."
-                % (added, "" if added == 1 else "s", len(self.joiner_list)),
+                self.tr("Added %(count)d file(s) to the joiner list "
+                        "(%(total)d entries).")
+                % {"count": added, "total": len(self.joiner_list)},
                 5000)
             self.info_panel.update_info()
             self.edit_joiner_list()
@@ -2730,7 +3127,7 @@ class MainWindow(QMainWindow):
 
     # Accepted extensions for drag-and-drop (lower-case, with the dot).
     _DND_EXTS = (".ts", ".m2ts", ".mkv", ".mp4", ".mov", ".avi", ".mpg",
-                 ".mpeg", ".vprj")
+                 ".mpeg", ".vprj", ".edl")
 
     def _dropped_paths(self, mime):
         """Local file paths from a drop's MIME data whose extensions we accept,
@@ -2768,11 +3165,14 @@ class MainWindow(QMainWindow):
             self._remember_dir("open", path)
             if path.lower().endswith(".vprj"):
                 self.load_project_file(path)
+            elif path.lower().endswith(".edl"):
+                self.load_edl_file(path)
             else:
                 self._open_video_path(path)
             return
 
-        videos = [p for p in paths if not p.lower().endswith(".vprj")]
+        videos = [p for p in paths
+                  if not p.lower().endswith((".vprj", ".edl"))]
         if len(videos) == 1:
             self._remember_dir("open", videos[0])
             self._open_video_path(videos[0])
@@ -3443,8 +3843,9 @@ class MainWindow(QMainWindow):
         profile_name = self.batch_controller.default_profile
 
         self.statusBar().showMessage(
-            f"Queued to batch: {base} ({profile_name}). "
-            "Open Tools \u2192 Batch Manager to run it.",
+            self.tr("Queued to batch: %(name)s (%(profile)s). "
+                    "Open Tools \u2192 Batch Manager to run it.")
+            % {"name": base, "profile": profile_name},
             8000,
         )
 
@@ -4457,7 +4858,7 @@ class MainWindow(QMainWindow):
         self.index_progress.hide()
 
         self.statusBar().showMessage(
-            f"Could not open video: {message}"
+            self.tr("Could not open video: %s") % message
         )
 
     def _reset_media_state(self):
@@ -6028,6 +6429,16 @@ class MainWindow(QMainWindow):
                 return
             controller.cancel_external(10000)
 
+        # Logo learning is discardable, so it is stopped without asking: it
+        # teaches Chalkline something useful but nothing depends on it, and
+        # a prompt about a background task the user never started would be
+        # baffling.  Stopped rather than left running, or Qt destroys a live
+        # QThread on the way out.
+        learner = getattr(self, "_learn_worker", None)
+        if learner is not None and learner.isRunning():
+            learner.cancel()
+            learner.wait(5000)
+
         # Remember the window size for next launch (use the normal, non-
         # maximised geometry so a maximised session doesn't save a giant size),
         # plus whether it was maximised so we can restore that state.
@@ -6243,14 +6654,10 @@ def _open_launch_argument():
             # A project carries its own source video and cuts.
             window.load_project_file(path)
         elif ext == ".edl":
-            # An EDL is only a cut list - it has no video of its own - so we
-            # can't open it standalone.  Tell the user rather than fail mutely.
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                window, "Open EDL",
-                "An EDL file contains only a cut list, not a video.\n\n"
-                "Open the video first, then load the EDL from "
-                "File \u2192 Import \u2192 EDL.")
+            # An EDL has no video of its own, so this offers to locate one.
+            # It used to point at a File -> Import -> EDL menu entry that has
+            # never existed.
+            window.load_edl_file(path)
         elif ext in MainWindow._DND_EXTS:
             window._open_video_path(path)
         else:

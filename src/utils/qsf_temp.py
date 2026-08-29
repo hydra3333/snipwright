@@ -17,8 +17,12 @@ that made it has finished there is no reason to keep it.  A copy left behind by
 a crash is caught later by age.
 """
 
+import logging
 import os
+import shutil
 import tempfile
+
+log = logging.getLogger("snipwright")
 
 # What the editor names its working copies: "<recording> - QSF.ts", and
 # "<recording> - QSF (2).ts" when the first name is already in use.
@@ -31,8 +35,54 @@ VIDEO_EXTS = {".ts", ".m2ts", ".mkv", ".mp4", ".mov", ".avi",
 
 
 def temp_dir():
-    """Where working copies are written."""
+    """Where working copies are written.
+
+    The system temporary folder unless `settings.qsf_temp_dir` names
+    somewhere else.  Configurable because retention does not solve the
+    problem it looks like it solves: cleaning up afterwards is no help when a
+    single working copy needs more room than the drive has in the first
+    place, and a working copy is a full remux of the source - roughly the
+    size of the original recording.  On Windows the system temporary folder
+    is on the system drive, which is the smallest one on most machines and
+    the worst place to put several gigabytes of video.
+
+    Falls back silently to the system folder when the configured path is
+    missing, is not a folder, or cannot be written to.  A repair that refuses
+    to run because a setting has gone stale - a disconnected share, a renamed
+    drive - would be a worse failure than the one this exists to prevent.
+    """
+    configured = ""
+    try:
+        from config.loader import ensure_config
+        configured = str(
+            ensure_config().get("settings", {}).get("qsf_temp_dir", "") or ""
+        ).strip()
+    except Exception:
+        configured = ""
+
+    if configured:
+        expanded = os.path.expanduser(configured)
+        if os.path.isdir(expanded) and os.access(expanded, os.W_OK):
+            return expanded
+        log.warning(
+            "The configured Quick Stream Fix folder is not usable, falling "
+            "back to the system temporary folder: %s", expanded,
+        )
     return tempfile.gettempdir()
+
+
+def free_space(folder=None):
+    """Bytes free where working copies are written, or None if unknown.
+
+    Used to say something useful when a repair runs out of room, rather than
+    reporting a bare write error and leaving the user to work out both which
+    folder filled up and that the folder is a setting they can change.
+    """
+    folder = folder or temp_dir()
+    try:
+        return shutil.disk_usage(folder).free
+    except OSError:
+        return None
 
 
 def looks_like_working_copy(path):

@@ -8,6 +8,6 @@
 
 PySide6        # Qt 6 GUI toolkit (the interface)
 av             # PyAV - frame-accurate decoding/muxing (used by the cutting engine)
-numpy          # array maths used during cutting
+numpy          # array maths used during cutting and by the advert detector
 bitstring      # bit-level parsing of the broadcast streams
 tqdm           # progress reporting in the cutting engine

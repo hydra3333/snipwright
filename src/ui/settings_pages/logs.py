@@ -15,7 +15,7 @@ class LoggingPage(SettingsPage):
         p = self._paths()
 
         self._log_row = PlainFolderRow(
-            "Log files:",
+            self.tr("Log files:"),
             p.get("log_folder", ""),
             f"(default: {self._ctx.default_log_folder})",
         )
