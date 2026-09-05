@@ -25,7 +25,12 @@ import time
 # Phases that re-encode video or audio.  These run at a completely different
 # rate from a stream copy and restart the progress bar, so they're timed
 # separately.
-RECODE_PHASES = ("recode_audio", "recode_full", "rebuild_audio", "crop")
+# Phases whose rate has nothing to do with the copy that preceded them, so
+# the estimate is timed from when the phase itself started.  repair_audio
+# belongs here for that reason, not because it is a full re-encode - it is
+# not.
+RECODE_PHASES = ("recode_audio", "recode_full", "rebuild_audio", "crop",
+                 "repair_audio")
 
 
 def format_seconds(secs):

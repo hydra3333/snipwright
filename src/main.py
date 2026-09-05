@@ -1622,12 +1622,17 @@ class MainWindow(QMainWindow):
                 source_ext = os.path.splitext(entry.source)[1] or ".ts"
                 break
         suggested = os.path.join(self._start_dir("export") or "", stem)
-        default_container = self.config.get("joiner", {}).get(
-            "out_format", "match")
 
+        # Opened exactly as Save Video is from the editor: Match Source, and no
+        # profile carried over from last time.  The joiner used to remember the
+        # container it last wrote, which could not identify a profile - four of
+        # the stock ones are MKV - so it landed on an arbitrary one and stuck
+        # there.  Remembering the profile by name instead would have worked,
+        # but nothing else in the application remembers a profile between
+        # sessions and the joiner has no reason to be the exception.
         dialog = SaveVideoDialog(
             self.config, suggested, source_ext, self,
-            default_container=default_container,
+            default_container="match",
             sample_source=sample_source,
         )
         if dialog.exec() != QDialog.Accepted:
@@ -1655,9 +1660,6 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
 
-        # Remember the chosen container as the joiner's default for next time.
-        self.config.setdefault("joiner", {})["out_format"] = out_format
-        save_config(self.config)
         self._remember_dir("export", out)
 
         progress = QProgressDialog(self.tr("Preparing…"), self.tr("Cancel"), 0, 100, self)
@@ -1666,24 +1668,55 @@ class MainWindow(QMainWindow):
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
+        # 420 to match the export dialog, which this now sits alongside.
+        # QProgressDialog otherwise sizes itself to whatever text it is showing
+        # at the time, so it opened narrow and then jumped wider the moment the
+        # time estimate appeared - and the estimate is deliberately withheld
+        # for the first few seconds, so the jump was several seconds in.
+        progress.setMinimumWidth(420)
 
         worker = JoinerRenderWorker(
             entries, out, profile, reencode_target, self)
         self._joiner_worker = worker          # keep a reference while it runs
 
+        # QProgressDialog hides itself the moment Cancel is pressed, and the
+        # next setValue() brings it straight back - so the dialog blinked, the
+        # render carried on, and a second click landed on the video underneath
+        # and toggled playback.  Cancelling is not instant (ffmpeg has to be
+        # stopped and the partial file cleaned up), so the dialog has to stay
+        # up and say what is happening.
+        cancelling = {"yes": False}
+
+        def on_cancel():
+            if cancelling["yes"]:
+                return
+            cancelling["yes"] = True
+            progress.setLabelText(self.tr("Cancelling…"))
+            progress.setCancelButton(None)     # nothing more to click
+            progress.show()                    # undo the automatic hide
+            worker.cancel()
+
         def on_progress(percent, label):
+            if cancelling["yes"]:
+                return                         # keep "Cancelling…" on screen
             progress.setLabelText(label)
             progress.setValue(percent)
 
         def on_done(path):
+            from ui.export_dialogs import ExportCompleteDialog
+
             progress.close()
             self.statusBar().showMessage(
                 self.tr("Joined video created: %s")
                 % os.path.basename(path), 6000)
             if clear_after:
                 self.joiner_list.clear()
-            QMessageBox.information(
-                self, self.tr("Joiner"), self.tr("Joined video created:\n\n%s") % (path,))
+            # The same summary a plain export gets, rather than a one-line
+            # box.  A join is the operation where the figures matter most: it
+            # can combine several recordings and normalise them to one shape,
+            # and the dialog is where that gets reported.
+            stats = getattr(worker, "stats", None) or {"out_path": path}
+            ExportCompleteDialog(stats, self).exec()
 
         def on_failed(message):
             progress.close()
@@ -1695,7 +1728,7 @@ class MainWindow(QMainWindow):
         worker.progress.connect(on_progress)
         worker.finished_ok.connect(on_done)
         worker.failed.connect(on_failed)
-        progress.canceled.connect(worker.cancel)
+        progress.canceled.connect(on_cancel)
         worker.start()
 
     def _load_joiner_entry(self, entry):
@@ -2976,9 +3009,12 @@ class MainWindow(QMainWindow):
             root, e = os.path.splitext(name)
             n = 2
             while True:
-                candidate = os.path.join(
-                    tempfile.gettempdir(), f"{root} ({n}){e}"
-                )
+                # temp_dir(), not tempfile.gettempdir(): this branch used the
+                # latter, which was both undefined here (tempfile is imported
+                # inside other methods, not at module level, so a collision
+                # raised NameError) and the wrong folder - it would have put
+                # the working copy somewhere the QSF sweep never looks.
+                candidate = os.path.join(temp_dir(), f"{root} ({n}){e}")
                 if norm_path(candidate) not in {norm_path(p) for p in busy}:
                     self._qsf_temps.append(candidate)
                     return candidate
@@ -3742,9 +3778,12 @@ class MainWindow(QMainWindow):
         Batch Manager, so both stage projects the same way.
         """
         from project.vprj import save_vprj
-        from config.loader import CONFIG_DIR
+        from batch.controller import staging_dir
 
-        queue_dir = os.path.join(str(CONFIG_DIR), "queue")
+        # The same helper the controller's cleanup uses to decide what is ours
+        # to delete.  Two separate constructions of this path would let the
+        # editor stage into one folder while the sweep tidied another.
+        queue_dir = staging_dir()
         try:
             os.makedirs(queue_dir, exist_ok=True)
         except OSError as exc:

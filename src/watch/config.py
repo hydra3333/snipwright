@@ -17,6 +17,17 @@ WATCH_FILE = CONFIG_DIR / "watch.json"
 # never re-runs Comskip on the same file.
 PROCESSED_FILE = CONFIG_DIR / "watch_processed.txt"
 
+# When a recording on the processed list was first noticed to be missing.
+# Kept as a sidecar so watch_processed.txt stays a plain hand-editable list of
+# paths, one per line, which the settings dialog invites people to edit.
+#
+# It exists because a recording that has vanished and a recording on a server
+# that is temporarily down look identical to os.path.exists().  Dropping an
+# entry the moment it cannot be seen meant a maintenance reboot of an NFS
+# server wiped the entire list, and every recording behind it was detected
+# again from scratch when the share came back.
+PROCESSED_MISSING_FILE = CONFIG_DIR / "watch_processed_missing.json"
+
 # Programme-title patterns to skip (one per line).  A recording is ignored if
 # its file name contains any of these (case-insensitive).  Edited from the
 # watcher's settings, or by hand.
@@ -73,6 +84,14 @@ DEFAULTS = {
     # How long an entry may go unmatched before it's considered stale, in
     # months.  A year suits programmes that return for a new series annually.
     "ignore_prune_months": 12,
+    # How long a recording must have been missing before it is dropped from
+    # the processed list, in hours.  Recordings on a network share disappear
+    # for entirely ordinary reasons - a reboot, maintenance, a share renamed -
+    # and dropping them immediately means every one of them is detected again
+    # when the share returns.  A day is far longer than any of those and still
+    # lets a genuinely deleted recording age out promptly.  0 restores the old
+    # behaviour of pruning as soon as a file cannot be seen.
+    "processed_grace_hours": 24,
 }
 
 
@@ -153,6 +172,21 @@ class WatchConfig:
     @settle_minutes.setter
     def settle_minutes(self, value):
         self._data["settle_minutes"] = value
+
+    @property
+    def processed_grace_hours(self):
+        try:
+            return max(0, int(self._data.get("processed_grace_hours", 24)))
+        except (TypeError, ValueError):
+            return 24
+
+    @processed_grace_hours.setter
+    def processed_grace_hours(self, value):
+        self._data["processed_grace_hours"] = int(value)
+
+    @property
+    def processed_grace_seconds(self):
+        return self.processed_grace_hours * 3600
 
     @property
     def log_max_files(self):

@@ -8,7 +8,11 @@ from av.packet import Packet
 from av.stream import Disposition, Stream
 
 from smartcut.latm import LatmError, LatmRepacketiser
-from smartcut.media_container import MediaContainer
+from smartcut.media_container import (
+    MediaContainer,
+    _CHANNEL_LAYOUTS,
+    latm_configs_in_ranges,
+)
 from smartcut.misc_data import CutSegment
 from smartcut.video_cutter import copy_packet
 
@@ -17,6 +21,7 @@ def create_audio_output_stream(
     media_container: MediaContainer,
     output_av_container: OutputContainer,
     track_index: int,
+    keep_ranges: list | None = None,
 ) -> AudioStream:
     """
     Create output audio stream from source media container.
@@ -38,9 +43,29 @@ def create_audio_output_stream(
     if getattr(in_stream.codec_context, "name", "") == "aac_latm" \
             and track.packets:
         try:
-            rep = LatmRepacketiser(bytes(track.packets[0]))
-            out_stream = output_av_container.add_stream(
-                "aac", rate=rep.sample_rate)
+            # Describe the stream from a packet the export actually keeps.
+            # packets[0] is the file's first, which on a broadcast recording
+            # is continuity from before the programme - stereo on a film
+            # that is 5.1 throughout.
+            probe_index = 0
+            if keep_ranges:
+                _configs, probe_index = latm_configs_in_ranges(
+                    track, keep_ranges)
+            rep = LatmRepacketiser(bytes(track.packets[probe_index]))
+            # The layout must be passed explicitly.  add_stream("aac",
+            # rate=...) defaults to stereo whatever the LATM config said, so
+            # a 5.1 recording was declared stereo even when nothing about it
+            # ever changed: Matroska wrote that into CodecPrivate and every
+            # frame decoded as "channel element 1.0 is not allocated".  MP4
+            # happened to recover by reading the frames, which is why this
+            # looked like an MKV-only fault.
+            layout = _CHANNEL_LAYOUTS.get(rep.channel_config)
+            if layout:
+                out_stream = output_av_container.add_stream(
+                    "aac", rate=rep.sample_rate, layout=layout)
+            else:
+                out_stream = output_av_container.add_stream(
+                    "aac", rate=rep.sample_rate)
             out_stream.time_base = in_stream.time_base
             out_stream.metadata.update(in_stream.metadata)
             out_stream.disposition = cast(

@@ -42,3 +42,12 @@ release-notes.md
 # Packaging checksum list — regenerated for each hand-over so the delivered
 # copy can be diffed against this one.  It describes a build, not the project.
 MANIFEST.txt
+
+# Development tooling and its results: corpus harness, detector diagnostics,
+# batch scores, trace logs. Local only, same class as CLAUDE.md.
+#
+# These live in the tree rather than in a scratch folder so a result is a
+# file next to the code that produced it, with a name and a date, instead of
+# terminal scrollback nobody can find again. Excluded from MANIFEST.txt too
+# — see the find command in CLAUDE.md.
+dev/

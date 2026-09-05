@@ -11,6 +11,7 @@ This does NOT cut anything; it produces a clean copy of the whole file.
 Runs on a worker thread.
 """
 
+import json
 import shutil
 import subprocess
 
@@ -85,6 +86,30 @@ def _dead_audio_streams(path):
     return dead
 
 
+def _source_service(path):
+    """(service_name, service_provider, service_id) of the source, if present.
+
+    Best-effort: any failure returns blanks and the repair proceeds without
+    them, exactly as it did before.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-hide_banner", "-loglevel", "error",
+             "-show_programs", "-of", "json", path],
+            capture_output=True, text=True, timeout=60).stdout
+        programs = json.loads(out).get("programs", [])
+    except Exception:
+        return "", "", None
+    for p in programs:
+        tags = p.get("tags") or {}
+        name = (tags.get("service_name") or "").strip()
+        provider = (tags.get("service_provider") or "").strip()
+        num = p.get("program_num")
+        if name or num not in (None, 0, 1):
+            return name, provider, num
+    return "", "", None
+
+
 def quick_stream_fix(
         source_path,
         out_path,
@@ -157,6 +182,24 @@ def quick_stream_fix(
         "-c", "copy",
         "-muxpreload", "0",
         "-muxdelay", "0",
+    ]
+
+    # Carry the channel's identity across the remux.  Without this the mpegts
+    # muxer writes its own SDT with the default name "Service01", and the
+    # repaired file no longer says which channel it came from - it says it is
+    # the same channel as every other repaired file.  Chalkline keys learned
+    # logos on this, so a mask learned from a repaired Channel 4 recording
+    # would be looked up for a repaired ITV one.  Found when saving a project
+    # for a Channel 4 HD recording reported it was learning "Service01".
+    _name, _provider, _sid = _source_service(source_path)
+    if _name:
+        cmd += ["-metadata", "service_name=%s" % _name]
+    if _provider:
+        cmd += ["-metadata", "service_provider=%s" % _provider]
+    if _sid:
+        cmd += ["-mpegts_service_id", str(_sid)]
+
+    cmd += [
         # Machine-readable progress on stdout.
         "-progress", "pipe:1",
         "-nostats",

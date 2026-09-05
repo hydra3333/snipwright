@@ -28,14 +28,29 @@ class _Bits:
     def __init__(self, data):
         self.data = data
         self.pos = 0          # bit position
+        self.end = len(data) * 8
 
     def read(self, n):
+        # Running off the end must raise LatmError, not IndexError.  This
+        # module's whole contract is that anything unparsable raises
+        # LatmError, which the caller catches to skip the frame; an
+        # IndexError sails straight past that handler and killed a user's
+        # export outright.  A damaged or unusual frame is a frame to skip,
+        # not a reason to abandon the file.
+        if n < 0 or self.pos + n > self.end:
+            raise LatmError("read past end of frame")
         v = 0
         for _ in range(n):
             byte = self.data[self.pos >> 3]
             v = (v << 1) | ((byte >> (7 - (self.pos & 7))) & 1)
             self.pos += 1
         return v
+
+    def skip(self, n):
+        """Advance without building a value - for spans too long to read."""
+        if n < 0 or self.pos + n > self.end:
+            raise LatmError("skip past end of frame")
+        self.pos += n
 
 
 # samplingFrequencyIndex -> Hz (ISO 14496-3 table 1.18)
@@ -129,14 +144,19 @@ class LatmRepacketiser:
         bits.read(8)                          # latmBufferFullness
 
         if bits.read(1):                      # otherDataPresent
-            # otherDataLenBits accumulates in (esc, 8-bit) chunks.
+            # otherDataLenBits accumulates in (esc, 8-bit) chunks.  Only the
+            # LENGTH lives here.  Per ISO 14496-3 s1.7.3 the otherData bits
+            # themselves sit in AudioMuxElement *after* PayloadMux, not in
+            # StreamMuxConfig, so skipping them here inflated _config_bits and
+            # made _payload_span() read the payload from the wrong offset.
+            # On a frame with a large otherDataLenBits the skip also ran off
+            # the end of the frame, which is how this surfaced.
             other = 0
             while True:
                 esc = bits.read(1)
                 other = (other << 8) | bits.read(8)
                 if not esc:
                     break
-            bits.read(other)                  # skip the other data
         if bits.read(1):                      # crcCheckPresent
             bits.read(8)                      # crcCheckSum
 

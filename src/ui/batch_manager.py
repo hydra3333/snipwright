@@ -45,6 +45,8 @@ _PHASE_TEXT = {
     "encode": QT_TRANSLATE_NOOP("BatchManager", "Encoding"),
     "verify": QT_TRANSLATE_NOOP("BatchManager", "Verifying"),
     "recode_audio": QT_TRANSLATE_NOOP("BatchManager", "Recoding audio"),
+    "repair_audio": QT_TRANSLATE_NOOP("BatchManager", "Repairing audio"),
+    "repackage_mp4": QT_TRANSLATE_NOOP("BatchManager", "Repackaging"),
     "recode_full": QT_TRANSLATE_NOOP("BatchManager", "Recoding"),
     "rebuild_audio": QT_TRANSLATE_NOOP("BatchManager", "Rebuilding audio"),
     "graft_audio": QT_TRANSLATE_NOOP("BatchManager", "Copying audio"),

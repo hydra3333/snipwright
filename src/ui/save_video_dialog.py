@@ -56,6 +56,9 @@ class SaveVideoDialog(QDialog):
         # It's never saved, so built-in profiles are left untouched and revert
         # the next time the dialog opens.
         self._override_profile = None
+        # True while the favourites filter is being changed by the code rather
+        # than by the user; see _show_all_quietly.
+        self._auto_fav = False
 
         # The directory + base name we build auto-suggestions from.  We use the
         # name as-is (no stripping - "(2011)" is a year, not a dedup suffix);
@@ -128,8 +131,11 @@ class SaveVideoDialog(QDialog):
         # --- favourites filter + buttons ----------------------------------
         bottom = QHBoxLayout()
         self.fav_only = QCheckBox(self.tr("Favourites Only"))
-        self.fav_only.setChecked(True)
-        self.fav_only.toggled.connect(self._fill_table)
+        # The user's own choice, remembered across sessions.  Set before the
+        # signal is connected so restoring it is not mistaken for a change.
+        self.fav_only.setChecked(bool(
+            (config or {}).get("save_video", {}).get("favourites_only", True)))
+        self.fav_only.toggled.connect(self._on_fav_toggled)
         bottom.addWidget(self.fav_only)
         bottom.addStretch(1)
 
@@ -158,12 +164,40 @@ class SaveVideoDialog(QDialog):
         want_name = keep_name
         if want_name is not None and not any(
                 p.favourite and p.name == want_name for p in self._profiles):
-            self.fav_only.setChecked(False)
+            self._show_all_quietly()
         elif (self._preselect_container is not None and not any(
                 p.favourite and p.container == self._preselect_container
                 for p in self._profiles)):
-            self.fav_only.setChecked(False)
+            self._show_all_quietly()
         self._fill_table(keep_name=keep_name)
+
+    def _on_fav_toggled(self, checked):
+        """The user ticked or unticked the filter: remember it and refill."""
+        if not self._auto_fav:
+            from config.loader import save_config
+
+            self.config.setdefault("save_video", {})["favourites_only"] = \
+                bool(checked)
+            try:
+                save_config(self.config)
+            except Exception:
+                pass          # a preference that won't save is not an error
+        self._fill_table()
+
+    def _show_all_quietly(self):
+        """Drop the favourites filter so a preselected profile is visible.
+
+        Deliberately NOT recorded as the user's choice.  Preselecting a
+        profile that is not a favourite has to unhide it, and when that was
+        left to the ordinary toggle the filter came back unticked every time
+        afterwards - which looked as though the setting had been remembered
+        when nobody had chosen it.
+        """
+        self._auto_fav = True
+        try:
+            self.fav_only.setChecked(False)
+        finally:
+            self._auto_fav = False
 
     def _edit_for_export(self):
         """Edit a copy of the selected profile for this export only.
@@ -210,6 +244,7 @@ class SaveVideoDialog(QDialog):
         self.table.setRowCount(len(rows))
         self._row_profiles = rows
         select_row = 0
+        matched_container = False
         for i, p in enumerate(rows):
             # Built-in profiles and their labels are stored in English;
             # translate them for display.  User-typed names are left alone.
@@ -225,8 +260,17 @@ class SaveVideoDialog(QDialog):
             if keep_name is not None and p.name == keep_name:
                 select_row = i
             elif (keep_name is None and self._preselect_container
-                  and p.container == self._preselect_container):
+                  and p.container == self._preselect_container
+                  and not matched_container):
+                # FIRST match, not last.  Without the flag this kept
+                # reassigning for every profile sharing the container, so a
+                # preselection of "mkv" against a list holding four MKV
+                # profiles landed on the bottom one - "4:3 Aspect MKV" rather
+                # than "Matroska MKV".  Container alone cannot identify a
+                # profile, so the first in the list is the only defensible
+                # choice; an exact name comes in through keep_name above.
                 select_row = i
+                matched_container = True
         if rows:
             self.table.selectRow(select_row)
 

@@ -38,7 +38,20 @@ logger = logging.getLogger("snipwright")
 #    and loading one puts the container straight back into the fault the fix
 #    removes - the cache would otherwise keep the bug alive on every file
 #    already opened.
-CACHE_VERSION = 3
+#
+# 4: audio tracks gained latm_configs.  An entry written before that carries
+#    none, and a container loaded from one would look like a file whose audio
+#    configuration never changes - so the export would take the wrong branch
+#    on every file already opened.  This is the same shape as the audio
+#    description fault: the cache skipping the walk is what breaks it, and it
+#    only bites on the second export of a file.
+#
+# 5: latm_configs became latm_config_points, holding (packet_index, config)
+#    change points rather than a bare set, so an export can ask which
+#    configurations its own kept ranges span.  The old attribute is no longer
+#    read, so a version 4 entry would restore nothing and look like a file
+#    with no LATM information at all.
+CACHE_VERSION = 5
 
 CACHE_DIR = Path.home() / ".config" / "snipwright" / "smartcut-index"
 
@@ -64,7 +77,7 @@ CACHED_ATTRS = (
 
 # Per audio track.  `packets` is not among them - it is a lazy view built at
 # open time, and caching it would defeat the point of it being lazy.
-CACHED_TRACK_ATTRS = ("frame_times_pts",)
+CACHED_TRACK_ATTRS = ("frame_times_pts", "latm_config_points")
 
 
 def cache_path_for(path):

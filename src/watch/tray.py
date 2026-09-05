@@ -20,6 +20,7 @@ import sys
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QUrl, QRectF, QCoreApplication
 from PySide6.QtGui import (
     QIcon, QPixmap, QPainter, QColor, QBrush, QPen, QDesktopServices,
+    QGuiApplication,
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -31,7 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from watch.config import (
-    WatchConfig, PROCESSED_FILE, IGNORE_FILE, IGNORE_SEEN_FILE,
+    WatchConfig, PROCESSED_FILE, PROCESSED_MISSING_FILE, IGNORE_FILE,
+    IGNORE_SEEN_FILE,
 )
 from watch.engine import (
     scan_once, ProcessedLog, load_ignore_patterns, IgnoreSeenLog,
@@ -70,6 +72,20 @@ def make_tray_icon(active=False):
     return QIcon(pm)
 
 
+def _rows_height(view, rows):
+    """Height for `rows` rows of a list view, in pixels.
+
+    Derived from the view's own metrics rather than fixed, so a larger system
+    font or a longer translation gets rows that still fit rather than rows
+    clipped to a number that suited one machine.
+    """
+    row = view.sizeHintForRow(0)
+    if row <= 0:
+        # An empty list has no row to measure yet.
+        row = view.fontMetrics().height() + 6
+    return rows * row + 2 * view.frameWidth() + 4
+
+
 class WatchScanWorker(QThread):
     """Runs one scan pass off the UI thread."""
 
@@ -92,7 +108,10 @@ class WatchScanWorker(QThread):
         self._pause = True
 
     def run(self):
-        processed = ProcessedLog(PROCESSED_FILE)
+        processed = ProcessedLog(
+            PROCESSED_FILE, PROCESSED_MISSING_FILE,
+            grace_seconds=self._cfg.processed_grace_seconds,
+        )
         ignore_patterns = load_ignore_patterns(IGNORE_FILE)
         ignore_seen = IgnoreSeenLog(IGNORE_SEEN_FILE)
 
@@ -296,7 +315,10 @@ class IgnorePruneDialog(QDialog):
         if answer != QMessageBox.Yes:
             return
 
-        processed = ProcessedLog(PROCESSED_FILE)
+        processed = ProcessedLog(
+            PROCESSED_FILE, PROCESSED_MISSING_FILE,
+            grace_seconds=self.cfg.processed_grace_seconds,
+        )
         removed, marked = prune_ignore_list(
             IGNORE_FILE, self._seen, ticked,
             processed=processed, cfg=self.cfg,
@@ -467,9 +489,39 @@ class WatchControlDialog(QDialog):
         self.cfg = tray.cfg
         self.setWindowTitle(self.tr("Snipwright Watcher"))
         self.setWindowIcon(make_tray_icon())
-        self.resize(560, 520)
         self._build_ui()
         self._load_into_ui()
+        self._size_to_contents()
+
+    def _size_to_contents(self):
+        """Open at the size the contents actually need.
+
+        The dialog used to open at a fixed 560x520 while its layout asked for
+        763, so Qt squeezed whatever would give: the spin boxes on the
+        Scanning page came out 18 pixels tall against the 23 they want, and
+        their numbers were clipped along the bottom.  Adding a third row made
+        that visible, but the shortfall was already there on the two above it.
+
+        Measured from the layout rather than replaced with a larger guessed
+        constant, because a guess only holds for one language and one font -
+        the German strings here are appreciably longer than the English, and
+        the next added row would put it back.
+
+        Capped against the screen so a short display gets a window it can
+        actually show, and a minimum is set so the squeezing cannot be
+        reintroduced by dragging the window smaller.
+        """
+        hint = self.sizeHint()
+        width, height = max(560, hint.width()), hint.height()
+
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(width, available.width())
+            height = min(height, available.height())
+
+        self.setMinimumSize(width, height)
+        self.resize(width, height)
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -498,6 +550,11 @@ class WatchControlDialog(QDialog):
         folders_box = QGroupBox(self.tr("Recording folders to watch"))
         fb = QVBoxLayout(folders_box)
         self.folders = QListWidget()
+        # Four rows, then it scrolls.  A QListWidget's own size hint reserves
+        # room for far more entries than anyone watches - two is typical - and
+        # that alone was most of the reason the window opened 763 pixels tall
+        # to show two lines of text.
+        self.folders.setMaximumHeight(_rows_height(self.folders, 4))
         fb.addWidget(self.folders)
         frow = QHBoxLayout()
         add_btn = QPushButton(self.tr("Add…"))
@@ -527,6 +584,24 @@ class WatchControlDialog(QDialog):
             "in-progress recordings are left alone.")
         )
         scan_grid.addWidget(self.settle_spin, 1, 1, alignment=Qt.AlignLeft)
+
+        scan_grid.addWidget(
+            QLabel(self.tr("Keep missing recordings for (hours):")), 2, 0
+        )
+        self.grace_spin = QSpinBox()
+        self.grace_spin.setRange(0, 8760)
+        self.grace_spin.setSpecialValueText(self.tr("Don't wait"))
+        self.grace_spin.setToolTip(
+            self.tr("How long a recording that has disappeared stays on the "
+            "completed list before the watcher forgets it. Recordings on a "
+            "network share vanish for ordinary reasons - a reboot, "
+            "maintenance, a share renamed - and forgetting them at once means "
+            "every one is detected again when the share comes back. A folder "
+            "that can't be read at all is always left alone, whatever this is "
+            "set to. Set to 0 to forget a recording as soon as it can't be "
+            "seen.")
+        )
+        scan_grid.addWidget(self.grace_spin, 2, 1, alignment=Qt.AlignLeft)
         scan_grid.setColumnStretch(2, 1)
         scan_v.addLayout(scan_grid)
 
@@ -624,6 +699,7 @@ class WatchControlDialog(QDialog):
         self.output_edit.setText(self.cfg.output_dir)
         self.interval_spin.setValue(self.cfg.scan_interval_minutes)
         self.settle_spin.setValue(int(self.cfg.settle_minutes))
+        self.grace_spin.setValue(self.cfg.processed_grace_hours)
         self.log_keep_spin.setValue(self.cfg.log_max_files)
         self.autostart_chk.setChecked(autostart.is_enabled())
         self.scan_launch_chk.setChecked(self.cfg.scan_on_launch)
@@ -698,6 +774,7 @@ class WatchControlDialog(QDialog):
         self.cfg.output_dir = self.output_edit.text()
         self.cfg.scan_interval_minutes = self.interval_spin.value()
         self.cfg.settle_minutes = self.settle_spin.value()
+        self.cfg.processed_grace_hours = self.grace_spin.value()
         self.cfg.log_max_files = self.log_keep_spin.value()
         self.cfg.scan_on_launch = self.scan_launch_chk.isChecked()
         self.cfg.save_when_no_adverts = self.save_no_ads_chk.isChecked()

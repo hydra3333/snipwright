@@ -428,12 +428,49 @@ def prune_ignore_list(ignore_path, seen, patterns, processed=None,
 # Processed log
 # --------------------------------------------------------------------------- #
 
-class ProcessedLog:
-    """Remembers which recordings have already been scanned (one path/line)."""
+def root_available(root):
+    """Whether a scan root can actually be read right now.
 
-    def __init__(self, path):
+    os.path.isdir() alone is not enough.  A stale NFS file handle leaves the
+    mount point looking like a directory while every read of it fails, and an
+    empty result from that is indistinguishable from "the share is up and
+    holds nothing" - which is how a whole processed list came to be discarded
+    twice in one day.  Listing it is the cheap way to tell the difference.
+    """
+    if not root:
+        return False
+    try:
+        if not os.path.isdir(root):
+            return False
+        os.listdir(root)
+    except OSError:
+        return False
+    return True
+
+
+class ProcessedLog:
+    """Remembers which recordings have already been scanned (one path/line).
+
+    Entries are only forgotten when the recording has genuinely gone.  That
+    sounds obvious and is the whole difficulty: a recording on a network share
+    that is rebooting is missing in exactly the way a deleted one is.  Two
+    guards, because neither covers the other's case:
+
+    - An entry under a root that cannot be read is never even considered.  The
+      root being down is evidence about the root, not about the file.
+    - Anything else that goes missing is held for a grace period first, and
+      only dropped once it has stayed missing that long.  This is what covers
+      a share that is mounted but broken, where the root looks readable and
+      the files under it do not.
+    """
+
+    def __init__(self, path, missing_path=None, grace_seconds=0):
         self.path = str(path)
+        self.missing_path = str(missing_path) if missing_path else ""
+        self.grace_seconds = max(0, int(grace_seconds or 0))
         self._set = set()
+        # path -> unix time it was first noticed missing.
+        self._missing_since = {}
         self.load()
 
     def load(self):
@@ -446,6 +483,24 @@ class ProcessedLog:
                         self._set.add(line)
         except OSError:
             pass
+        self._load_missing()
+
+    def _load_missing(self):
+        self._missing_since = {}
+        if not self.missing_path:
+            return
+        try:
+            with open(self.missing_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        for key, when in data.items():
+            try:
+                self._missing_since[key] = float(when)
+            except (TypeError, ValueError):
+                continue
 
     def save(self):
         try:
@@ -455,19 +510,116 @@ class ProcessedLog:
                     f.write(p + "\n")
         except OSError:
             pass
+        self._save_missing()
+
+    def _save_missing(self):
+        if not self.missing_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.missing_path), exist_ok=True)
+            if not self._missing_since:
+                # Nothing is missing: remove the sidecar rather than leave an
+                # empty file, so its presence means something.
+                if os.path.exists(self.missing_path):
+                    os.remove(self.missing_path)
+                return
+            with open(self.missing_path, "w", encoding="utf-8") as f:
+                json.dump(self._missing_since, f, indent=2, sort_keys=True)
+        except OSError:
+            pass
 
     def contains(self, path):
         return path in self._set
 
     def add(self, path):
         self._set.add(path)
+        # Back from wherever it went: forget it was ever missing, so a file
+        # that flickers does not accumulate its way to the grace period.
+        self._missing_since.pop(path, None)
 
-    def prune_missing(self):
-        """Drop entries whose recording no longer exists, so re-recording the
-        same path later gets picked up again."""
-        before = len(self._set)
-        self._set = {p for p in self._set if os.path.exists(p)}
-        return before - len(self._set)
+    def missing_count(self):
+        """How many entries are currently being held over a missing file."""
+        return len(self._missing_since)
+
+    def prune_missing(self, roots=None, now=None):
+        """Drop entries whose recording has genuinely gone.
+
+        Returns (dropped, held): how many entries were forgotten, and how many
+        are missing but being kept for now.  `roots` is the configured scan
+        roots; passing them is what allows an unreachable share to be told
+        from a deleted file, so a caller that has them should always pass them.
+        """
+        now = now if now is not None else time.time()
+
+        # Resolved once: on a down share each check can block, and there is no
+        # sense paying that per entry.
+        unreachable = [
+            r for r in (roots or []) if r and not root_available(r)
+        ]
+        if unreachable:
+            log.warning(
+                "Not reading %d scan root(s) - %s. Nothing under them will be "
+                "removed from the processed list.",
+                len(unreachable), ", ".join(unreachable),
+            )
+
+        def under_unreachable_root(entry):
+            for root in unreachable:
+                # A path comparison rather than os.path.commonpath, which
+                # raises on paths that share no root at all.
+                prefix = os.path.join(os.path.abspath(root), "")
+                if os.path.abspath(entry).startswith(prefix):
+                    return True
+            return False
+
+        keep = set()
+        dropped = 0
+
+        for entry in self._set:
+            try:
+                present = os.path.exists(entry)
+            except OSError:
+                # A stale handle raises rather than answering.  Not evidence
+                # of deletion.
+                present = True
+
+            if present:
+                keep.add(entry)
+                self._missing_since.pop(entry, None)
+                continue
+
+            if under_unreachable_root(entry):
+                # Say nothing about it, not even that it is missing: when the
+                # share returns it must look exactly as it did before.
+                keep.add(entry)
+                continue
+
+            first = self._missing_since.get(entry)
+            if first is None:
+                first = now
+                self._missing_since[entry] = first
+
+            if self.grace_seconds and (now - first) < self.grace_seconds:
+                keep.add(entry)
+                continue
+
+            dropped += 1
+            self._missing_since.pop(entry, None)
+
+        self._set = keep
+        # Anything that is no longer on the list has nothing to be missing
+        # from, so its held entry would otherwise linger for ever.
+        self._missing_since = {
+            k: v for k, v in self._missing_since.items() if k in self._set
+        }
+        held = len(self._missing_since)
+
+        if dropped or held:
+            log.info(
+                "Processed list: %d entry(s) forgotten, %d missing but held.",
+                dropped, held,
+            )
+        return dropped, held
 
     def __len__(self):
         return len(self._set)
@@ -615,7 +767,22 @@ def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
 
     seen_paths = []
     summary = {"scanned": 0, "projects": 0, "no_ads": 0,
-               "skipped": 0, "errors": 0, "ignored": 0, "paused": False}
+               "skipped": 0, "errors": 0, "ignored": 0, "paused": False,
+               "forgotten": 0, "held": 0, "unreachable": []}
+
+    # Checked before any work, so the log says plainly that a share was down
+    # rather than leaving a scan that found nothing to be read as a scan that
+    # found nothing new.
+    summary["unreachable"] = [
+        r for r in cfg.input_roots if r and not root_available(r)
+    ]
+    if summary["unreachable"]:
+        log.warning(
+            "%d of %d scan root(s) could not be read: %s. Recordings under "
+            "them are left on the processed list.",
+            len(summary["unreachable"]), len(cfg.input_roots),
+            ", ".join(summary["unreachable"]),
+        )
 
     # Give any newly-added ignore entries a starting date, and forget the ones
     # that have since been deleted by hand.
@@ -738,8 +905,12 @@ def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
             log.info("Done: %s - no commercials found.", name)
         emit("done", result)
 
-    # Forget recordings that have since been deleted.
-    processed.prune_missing()
+    # Forget recordings that have since been deleted - but only ones we can
+    # actually tell are deleted.  The roots go in so an unreachable share is
+    # not mistaken for a folderful of vanished recordings.
+    dropped, held = processed.prune_missing(roots=cfg.input_roots)
+    summary["forgotten"] = dropped
+    summary["held"] = held
     processed.save()
     if ignore_seen is not None and seen_dirty:
         ignore_seen.save()

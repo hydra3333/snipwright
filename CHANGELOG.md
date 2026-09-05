@@ -6,6 +6,271 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-09-05
+
+### Changed
+
+- **The joiner's progress bar was misleading throughout.** It passed the
+  exporter's progress straight through, and the exporter counts each of its
+  stages from zero, so an eight-scene join ran to 11%, back to 0, and up to 11%
+  again, eight times over. Worse, converting the joined file to MP4 - a full
+  re-encode, and the longest part of the run - was squeezed into the last few
+  percent, so the bar sat near the top for minutes with nothing appearing to
+  happen.
+
+  A join is really several jobs: cutting each scene, joining them, then writing
+  the result in the requested format. Each of those now gets the whole bar in
+  turn, the way a normal export does - the bar fills, the label changes, and it
+  fills again. Within a stage it only ever moves forwards, and the status line
+  shows a time estimate once enough of that stage is done to give an honest
+  one.
+
+- **Cancel did nothing while a join was converting to MP4.** The dialog
+  vanished and immediately came back, the conversion carried on to the end, and
+  a second click landed on the video underneath and started it playing. Cancel
+  now stops the conversion, and the dialog stays up and says it is cancelling
+  rather than blinking out of the way.
+
+- **Save Video remembers whether you want only your favourites.** The tick box
+  reset to on every time it opened. It now keeps whatever you chose, in the
+  joiner and in a normal export alike.
+
+  It also appeared to remember a choice nobody had made: preselecting a profile
+  that is not a favourite has to drop the filter so you can see it, and that
+  was indistinguishable from unticking the box yourself. Only your own change
+  is remembered now.
+
+- **The joiner's progress window was too narrow, and grew part-way through.**
+  It sized itself to whatever text it was showing, so it opened small and
+  jumped wider a few seconds in, when the time estimate appeared. It now opens
+  at the same width as the export window and stays there.
+
+- **Save Video preselected the wrong profile.** When it was asked to open on
+  a particular container it picked the *last* profile using that container
+  rather than the first, so anyone with several MKV profiles was handed
+  whichever happened to be at the bottom of the list. From the joiner this was
+  every time, and it stuck: the container was saved and matched again next
+  time, landing on the same wrong profile.
+
+  The joiner no longer carries anything over between sessions. It opens on
+  Match Source and behaves exactly as Save Video does from the editor.
+
+- **The joiner logged an "Export complete" for every scene.** It renders each
+  scene before joining them, and each of those wrote a full completion summary,
+  so a five-scene join looked like six finished exports. The intermediate
+  renders now say which scene they were.
+
+- **The joiner now shows the same completion summary as an export.** It
+  finished with a one-line "Joined video created" box while a plain export got
+  the full figures - the wrong way round, since a join is the operation most
+  likely to have quietly re-encoded and reshaped several recordings into one.
+  It now reports length, size, scenes, frame counts, tracks and bitrate, all
+  measured from the finished file, and says plainly when the scenes had to be
+  re-encoded to be joined.
+
+- **Re-encoded audio now keeps the recording's own bitrate and channels.**
+  Wherever Snipwright has to re-encode audio it used to impose a flat 192 kbps,
+  whatever the recording was: fine for a stereo broadcast, wasteful or lossy
+  for anything else. It now follows what the source actually has, and says
+  nothing to the encoder at all when that cannot be read, rather than
+  substituting a figure. An output profile that specifies a bitrate still wins.
+
+  The joiner was worse than that. When it has to re-encode rather than copy -
+  joining recordings that do not match, or anything with a fade or a title card
+  - it flattened every scene to stereo before joining, so joining two halves of
+  a 5.1 recording gave a stereo result. It now joins at the widest layout
+  present, so surround survives and a stereo title card no longer drags the
+  programme down to match it.
+
+- **A surround recording is no longer downmixed to stereo to fix a few
+  frames.** When a recording's audio changes channel configuration too widely
+  to patch, the whole track has to be re-encoded to a single configuration -
+  and that was hardcoded to stereo. A Channel 4 HD film is 5.1 for its entire
+  length apart from the continuity announcements at the advert breaks, so the
+  surround mix was thrown away for the sake of a few seconds of bumper. The
+  re-encode now keeps whichever configuration the recording mostly uses, at a
+  bitrate measured from the recording rather than a fixed figure. A genuinely
+  stereo recording still comes out stereo; nothing is ever upmixed.
+
+- **The MKV audio check could pass a file with faults in it.** It sampled six
+  thirty-second windows rather than checking the whole recording, and the
+  problem it exists to catch is a scattering of bad frames - 83 out of 415,696
+  on the recording it was written for, sitting at scene starts. Three minutes
+  of a three-hour film will nearly always miss them, so a repackaged MKV could
+  carry brief glitches and still be reported as verified. It now checks the
+  whole recording. On a three-hour file that costs about twenty seconds, on an
+  export that already takes minutes.
+
+  It also now counts the audio frames in the finished file against the cut it
+  was built from, which the re-encode fallback already did. A track that has
+  lost most of its frames decodes perfectly - that is precisely why a decode
+  check alone could not catch it.
+
+- **Audio description tracks went unverified.** Every audio check looked only
+  at the first track, so a recording's second track - typically the audio
+  description - could lose its content without anything noticing. That is the
+  wrong way round: an AD track is silent for long stretches by design, which
+  makes it the likeliest to fail quietly. Every track is now checked, both for
+  decoding and for frame count. A track the export deliberately leaves out,
+  because it carried nothing in the kept scenes, is still not treated as lost
+  audio.
+
+- **MP4 exports were not checked at all.** Writing an MP4 repackages the audio
+  as surely as writing an MKV does - the configuration moves out of the frame
+  headers and into the container - but only MKV was verified. MP4 now has its
+  audio counted against the cut it was built from, and says so in the export
+  summary if it comes up short.
+
+- **Verifying an MKV's audio now shows progress.** The check samples six
+  windows across the file and, when it needs to compare against the cut it was
+  built from, does it twice. That ran under the mux's busy indicator, so a
+  dozen decodes on a long recording looked like the mux had stalled. It now
+  reports its own progress and says *Verifying output* while it does.
+
+- **The audio repair now shows real progress.** Repairing a recording whose
+  audio changes channel configuration used to sit on a busy indicator with no
+  indication of how far along it was or how much longer it would take. It now
+  reports a percentage and an estimated time, counted across every track that
+  needs work. It is also named *Repairing audio* rather than *Recoding*, which
+  it never was.
+
+### Fixed
+
+- **An export that copied both streams into MP4 said it was recoding.** The
+  label was chosen from the video codec alone, before anything had looked at
+  the audio, so a recording that was copied through untouched was announced the
+  same way as one being re-encoded and downmixed to stereo. There was no way to
+  tell the two apart from the dialog. It now says what is actually happening,
+  including *Repackaging to MP4* when nothing is being re-encoded at all.
+
+- **A failed audio adjustment crashed the export instead of reporting itself.**
+  Asking for an audio delay, a surround downmix or loudness processing that
+  ffmpeg then could not apply raised an internal error, rather than finishing
+  the export and saying plainly that the cut was fine but the adjustment had
+  not been applied.
+
+- **Numbers were clipped in the watcher's settings.** The window opened at a
+  fixed size smaller than its own contents needed, so everything that could be
+  squeezed was: the spin boxes under *Scanning* lost several pixels of height
+  and their values were cut off along the bottom. It now opens at the size the
+  contents ask for, whatever the language, and cannot be dragged smaller than
+  that.
+
+  The list of watched folders was reserving room for far more entries than
+  anyone has, which was most of the reason the window was so tall to begin
+  with. It now shows four folders and scrolls beyond that, and the window is
+  around a hundred pixels shorter as a result. (Both reported in testing.)
+
+- **The watcher detected everything again when a network share came back.**
+  It keeps a list of the recordings it has already looked at, and dropped any
+  entry whose file it could not see. A recording that has gone and a recording
+  on a share that is rebooting look exactly alike to that check, so a server
+  going down for maintenance - or a share being renamed - emptied the whole
+  list at once, and every recording on it was detected again from scratch when
+  the share returned. A week's recordings is a long evening's work for nothing.
+
+  A folder the watcher cannot read is now left strictly alone: nothing under it
+  is forgotten, however long it stays away, and the log names the folder it
+  could not reach. Anything else that disappears is held for a period set in
+  the watcher's settings - a day by default - and only forgotten once it has
+  stayed missing that long. That second guard covers the harder case of a
+  share that is mounted but not readable, where the folder itself looks
+  perfectly healthy and every recording under it does not. (Reported in
+  testing.)
+
+- **Channel 4 HD recordings failed to export with "index out of range".** UK
+  broadcast AAC is LATM-framed, and the reader that unpacks it indexed past
+  the end of a damaged frame instead of reporting it as unreadable. The
+  exporter is built to skip a frame it cannot parse; this particular failure
+  went straight past that and stopped the export. Frames that cannot be read
+  are now skipped as intended.
+
+  The same reader was also mis-measuring the configuration header, walking off
+  the end of frames that were perfectly good. (Reported in testing.)
+
+- **5.1 audio was lost from MKV exports.** The output track was created
+  without a channel layout, so it was built as stereo whatever the recording
+  actually contained, and a 5.1 recording came out with a silent or unusable
+  track. MP4 escaped it because of how that container is written, which is why
+  this looked like an MKV-only fault. A recording that is 5.1 from beginning
+  to end, with no change anywhere in it, was enough to trigger it.
+
+- **Audio description tracks were dropped from cuts that began in a break.**
+  An AD track carries nothing during continuity announcements and advert
+  breaks, so a cut starting in one of those gaps has its first AD packet half
+  a minute in. The checks that inspect a cut gave up long before reaching it,
+  read the track as having no channels and no sample rate, and either failed
+  the mux outright or quietly left the track out. Every one of those checks now
+  looks far enough into the file to find the audio, which is what the check on
+  the *source* recording already did.
+
+- **Cuts spanning an advert break could produce a video with no sound.**
+  Broadcast AAC changes its channel configuration at the breaks - Channel 4 HD
+  runs continuity in stereo and the programme in 5.1, thirteen times in a
+  three-hour recording. MPEG-TS carries that configuration with every frame, so
+  a `.ts` export plays correctly, but MKV and MP4 hold one configuration for
+  the whole track: copying such a cut gave a track with the right length and no
+  audio.
+
+  Snipwright now replaces only the minority frames - 83 out of 415,649 on the
+  recording this was found with - and passes everything else through
+  untouched. The 5.1 mix is kept, the repair takes seconds rather than the ten
+  minutes a full re-encode of a feature film costs, and every timestamp in the
+  original is carried across unchanged, so a recording with broadcast dropouts
+  in it stays in sync. A cut that spans no configuration change is left
+  completely alone.
+
+- **A good MKV export was thrown away and re-encoded over two damaged
+  frames.** The check that confirms the audio survived the repackage failed on
+  any decoder complaint at all. Broadcast recordings carry a few frames no
+  decoder can read - 53 out of 500,483 on the recording this was found with -
+  and those are in the source, the intermediate and the finished file alike.
+  Two of them were enough to condemn a perfectly good export: it was rebuilt,
+  saw the same two frames, and re-encoded the whole track. An hour of work and
+  a real loss of quality, to fix nothing.
+
+  The check now compares against the intermediate the file was built from, so
+  it answers the question that matters - did the repackage damage the audio? -
+  rather than whether the recording is flawless. It also samples across the
+  file instead of only the first minute, and counts the frames it found, since
+  a nearly empty track decodes perfectly and used to pass.
+
+  The last-resort re-encode was also reading the already-broken file rather
+  than the intermediate, which is how it once produced two minutes of audio
+  for a two-and-a-half-hour film.
+
+- **An exported recording no longer said which channel it came from.** Writing
+  a `.ts` let ffmpeg put its own defaults in, so every export claimed to be
+  "Service01" whatever channel it was recorded off - and, less visibly, had its
+  service ID renumbered to 1. Recorders differ in which of those they preserve:
+  some write a channel name but renumber the service, others keep the original
+  service number but write no name. Snipwright can use either, so an export
+  that lost both could no longer be tied to the channel it came from at all.
+  Both are now carried through.
+
+- **A repaired recording no longer said which channel it came from.** Quick
+  Stream Fix rebuilds the file, and the rebuild wrote a default service name
+  in place of the broadcaster's, so every repaired recording claimed to be from
+  the same channel. Advert detection keys what it learns on that name, so it
+  was filing every channel's logo under one entry. The channel name, provider
+  and service ID are now carried through the repair.
+
+- **Removing a batch job left its project file behind.** *Queue to Batch*
+  writes a staging project into the configuration folder for each job, and
+  nothing ever removed one, so the folder grew for as long as the feature was
+  used. A staged project is now deleted when its job leaves the queue, and any
+  left behind by a crash are cleared at the next start. Projects you added to
+  the Batch Manager yourself are never touched - only the copies Snipwright
+  staged for itself.
+
+- **Quick Stream Fix could fail when the recording was already open.** Where
+  the working copy's name was already taken - because the same recording was
+  loaded, or a background export was still reading it - the code that picks an
+  alternative name raised an internal error instead. It also would have put
+  that copy in the system temporary folder rather than the Quick Stream Fix
+  folder set in Settings, where the automatic cleanup would never have found it
+  to delete.
+
 ## [2.5.0] - 2026-08-29
 
 ### Added

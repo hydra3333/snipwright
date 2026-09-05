@@ -374,6 +374,20 @@ def probe(video):
     return duration, fps
 
 
+# ffmpeg's mpegts muxer writes "Service01" into the SDT when nothing tells it
+# otherwise, so a remuxed recording carries a name that identifies no channel
+# - and, worse, the SAME name for every channel.  A logo learned under it
+# would be looked up for every remuxed recording regardless of what it came
+# from, quietly matching Channel 4's mask against ITV.  Rejected for exactly
+# the reason program_num 1 is below: it is what a remuxer writes when the real
+# identity has been thrown away.
+#
+# Quick Stream Fix now passes the original name through (see
+# repair/stream_fix.py), but files repaired before that, and anything remuxed
+# by other tools, still carry it.
+_GENERIC_SERVICE = re.compile(r"^service\s*0*\d+$", re.IGNORECASE)
+
+
 def channel_key(video):
     """A stable identifier for the channel a recording came from.
 
@@ -403,7 +417,7 @@ def channel_key(video):
         return None
     for p in programs:
         name = (p.get("tags") or {}).get("service_name", "").strip()
-        if name:
+        if name and not _GENERIC_SERVICE.match(name):
             return name
     for p in programs:
         num = p.get("program_num")

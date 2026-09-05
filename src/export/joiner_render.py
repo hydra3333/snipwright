@@ -18,6 +18,8 @@ import json
 import shutil
 import subprocess
 
+import logging
+
 from media.pixfmt import for_output as pixfmt_for_output
 
 from utils.proc import popen_progress, read_stderr
@@ -25,11 +27,15 @@ import tempfile
 
 from PySide6.QtCore import QThread, Signal
 
+logger = logging.getLogger("snipwright")
+
 from media.frame_index import build_index_sync
 from export.exporter import (
     export_ranges,
     _write_mkv_chapters,
     _transcode_to_mp4,
+    _count_output_frames,
+    _audio_frame_count,
     _Cancelled as _ExporterCancelled,
 )
 
@@ -236,6 +242,19 @@ class JoinerRenderWorker(QThread):
         # (width, height, fps) -> re-encode every scene to that and join.
         self._reencode_target = reencode_target
         self._cancel = False
+        # (short label, full explanation) pairs for the completion dialog,
+        # filled in as the run goes.  A join can quietly normalise several
+        # recordings into one shape, so what it did is worth reporting rather
+        # than leaving to the log.
+        self._notes = []
+        # The current stage's high-water mark, which stage it is, and when
+        # that stage began; see _report.
+        self._last_percent = 0
+        self._stage = None
+        self._stage_started = None
+        # Populated just before finished_ok is emitted; read by the caller in
+        # its slot.
+        self.stats = {}
 
     def _profile_is_lossless_copy(self):
         """True when the profile asks for nothing beyond a possible container
@@ -262,7 +281,145 @@ class JoinerRenderWorker(QThread):
         if self._cancel:
             raise _Cancelled()
 
+    def _report(self, percent, label, stage=None):
+        """Emit progress for the current stage, never backwards within it.
+
+        A join is not one job, it is several: cutting each scene, joining
+        them, then writing the result in the requested format.  Squeezing all
+        of that onto one 0-100 bar meant the last stage - which re-encodes,
+        and is the slowest thing in the run - got a sliver at the top, and the
+        bar sat at 99% while the real work happened.
+
+        So each stage gets the whole bar, the same way a normal export does:
+        the bar fills, the label changes, and it fills again.  `stage` is any
+        token that identifies the current one; passing a new one resets the
+        bar to the beginning.
+
+        Within a stage the value never falls, because the exporter reports
+        each of ITS phases as a fresh 0-100 and passing those through
+        unfiltered is what made the bar bounce backwards on every scene.
+        """
+        if stage is not None and stage != self._stage:
+            self._stage = stage
+            self._last_percent = 0
+            self._stage_started = None
+
+        percent = max(0, min(100, int(percent)))
+        if percent < self._last_percent:
+            percent = self._last_percent
+        self._last_percent = percent
+        self.progress.emit(percent, self._with_eta(percent, label))
+
+    def _with_eta(self, percent, label):
+        """The status label with a time estimate appended, once one is sound.
+
+        The estimate lives in the LABEL, not the bar: the bar has room for a
+        percentage and nothing else, and the label is already a full line of
+        text sitting under it.
+
+        Deliberately plain arithmetic - elapsed time scaled by how much is
+        left - rather than the exporter's EtaTracker. That tracker times each
+        recode phase separately because a phase change means the rate changes;
+        here there is one bar covering scene renders and a whole-file pass,
+        and the honest thing to report is the average so far.
+
+        Nothing is shown below 5% or in the first few seconds, because an
+        estimate drawn from almost no data is worse than no estimate: it swings
+        wildly and people watch it instead of the bar.
+        """
+        import time
+
+        # Timed from the START OF THIS STAGE, not the run.  The stages do
+        # wildly different work - a stream copy then a whole-file encode - so
+        # an average across them would predict the encode from the copy's rate
+        # and be badly wrong in the direction that matters.
+        if self._stage_started is None:
+            self._stage_started = time.time()
+
+        if percent < 5 or percent >= 100:
+            return label
+
+        elapsed = time.time() - self._stage_started
+        if elapsed < 5.0:
+            return label
+
+        remaining = elapsed * (100.0 - percent) / percent
+        if remaining < 1.0:
+            return label
+
+        from utils.eta import format_seconds
+        return "%s  (about %s left)" % (label, format_seconds(remaining))
+
+    def _completion_stats(self, started, durations):
+        """The figures ExportCompleteDialog shows, measured from the output.
+
+        The joiner used to finish with a one-line "Joined video created" box
+        while a plain export got the full summary.  That is the wrong way
+        round: a join is the operation where you most want to see what came
+        out, because it is the one that can silently re-encode several
+        recordings into one and normalise them to a common shape.
+
+        Every figure here is read back off the finished file rather than
+        totted up from what we intended to write, so it reports what is
+        actually on disk.
+        """
+        import time
+
+        stats = {
+            "out_path": self._out,
+            "scenes": len(self._entries),
+            "duration_secs": sum(durations),
+            "processing_secs": max(0.0, time.time() - started),
+            "errors": [],
+            "notes": list(self._notes),
+        }
+
+        try:
+            stats["out_size"] = os.path.getsize(self._out)
+        except OSError:
+            stats["out_size"] = 0
+
+        try:
+            stats["video_frames"] = _count_output_frames(self._out)
+        except Exception:
+            stats["video_frames"] = 0
+
+        try:
+            frames = _audio_frame_count(self._out)
+            stats["audio_frames"] = frames or 0
+        except Exception:
+            stats["audio_frames"] = 0
+
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a",
+                 "-show_entries", "stream=index", "-of", "csv=p=0",
+                 self._out],
+                capture_output=True, text=True, timeout=30,
+            ).stdout
+            # A SET of indexes, not a line count.  ffprobe lists an MPEG-TS
+            # stream once per program, so a single-audio recording came back
+            # as two tracks - the same trap that once had the exporter mapping
+            # streams that did not exist.
+            stats["audio_tracks"] = len(
+                {line.strip() for line in out.splitlines() if line.strip()})
+        except Exception:
+            stats["audio_tracks"] = 0
+
+        elapsed = stats["processing_secs"]
+        stats["fps"] = (stats["video_frames"] / elapsed) if elapsed else 0.0
+
+        seconds = stats["duration_secs"]
+        stats["video_bitrate"] = (
+            int(stats["out_size"] * 8 / seconds) if seconds else 0)
+
+        return stats
+
     def run(self):
+        import time
+
+        started = time.time()
+        self._started_at = started
         tmpdir = tempfile.mkdtemp(prefix="snipwright-joiner-")
         index_cache = {}
         segments = []
@@ -272,8 +429,11 @@ class JoinerRenderWorker(QThread):
             if n == 0:
                 raise RuntimeError("The joiner list is empty.")
 
-            # One progress "slot" per scene plus one for the join/convert step.
-            slots = n + 1
+            # The scene renders are one stage and own the whole bar
+            # between them; the join and the format pass are stages of their
+            # own.  Trying to fit everything on one bar meant whichever stage
+            # came last got whatever was left, which was a sliver.
+            slots = n
 
             for i, entry in enumerate(self._entries):
                 self._check_cancel()
@@ -283,9 +443,9 @@ class JoinerRenderWorker(QThread):
                 # which the caller guarantees by setting a target when a title
                 # is present.
                 if entry.is_title:
-                    self.progress.emit(
-                        int(i * 100 / slots),
-                        "Building title card %d of %d…" % (i + 1, n))
+                    self._report(i * 100 / slots,
+                                 "Building title card %d of %d…" % (i + 1, n),
+                                 stage="scenes")
                     target = self._reencode_target or (1920, 1080, 25)
                     seg = self._make_title(entry, i, tmpdir, target)
                     segments.append(seg)
@@ -296,8 +456,9 @@ class JoinerRenderWorker(QThread):
                 if not src or not os.path.exists(src):
                     raise RuntimeError("File not found:\n%s" % (src,))
 
-                self.progress.emit(int(i * 100 / slots),
-                                   "Rendering scene %d of %d…" % (i + 1, n))
+                self._report(i * 100 / slots,
+                             "Rendering scene %d of %d…" % (i + 1, n),
+                             stage="scenes")
 
                 # Build (or reuse) the source's frame index, then map the
                 # scene's seconds onto frame numbers for the exporter.
@@ -314,9 +475,14 @@ class JoinerRenderWorker(QThread):
 
                 def _cb(data, base=i):
                     pct = data.get("percent", 0) if isinstance(data, dict) else 0
-                    self.progress.emit(
-                        int((base + pct / 100.0) * 100 / slots),
-                        "Rendering scene %d of %d…" % (base + 1, n))
+                    # A phase that reports -1 is a busy indicator, not a
+                    # position; hold where we are rather than snapping to the
+                    # start of the scene's slot.
+                    if pct < 0:
+                        pct = 0
+                    self._report((base + pct / 100.0) * 100 / slots,
+                                 "Rendering scene %d of %d…" % (base + 1, n),
+                                 stage="scenes")
 
                 # Always render the intermediate pieces as .ts; the chosen
                 # output format is applied once, to the joined file.
@@ -325,14 +491,20 @@ class JoinerRenderWorker(QThread):
                     out_format="match",
                     progress_cb=_cb,
                     cancel_cb=lambda: self._cancel,
+                    # Not "Export complete": this is an intermediate piece,
+                    # and one per scene made a single join look like several
+                    # finished exports in the log.
+                    summary_label="Joiner: scene %d of %d rendered:" % (
+                        i + 1, n),
                 )
                 self._check_cancel()
                 segments.append(seg)
                 durations.append(entry.duration)
 
-            self.progress.emit(int(n * 100 / slots),
-                               "Joining scenes…" if not self._reencode_target
-                               else "Re-encoding and joining scenes…")
+            self._report(0,
+                         "Joining scenes…" if not self._reencode_target
+                         else "Re-encoding and joining scenes…",
+                         stage="join")
             if self._reencode_target:
                 fades = [
                     (float(getattr(e, "fade_in", 0.0) or 0.0),
@@ -355,12 +527,14 @@ class JoinerRenderWorker(QThread):
             if self._profile_is_lossless_copy():
                 self._finalize(joined_ts, durations)
             else:
-                base = int(n * 100 / slots)
-                self.progress.emit(base, "Applying profile…")
-                self._apply_profile(joined_ts, base)
+                self._report(0, "Applying profile…", stage="finish")
+                self._apply_profile(joined_ts, 0)
             self._check_cancel()
 
-            self.progress.emit(100, "Done")
+            self._report(100, "Done", stage="done")
+            # Populated before finished_ok so the caller can read it in the
+            # slot, matching how chalkline_worker hands back its own extras.
+            self.stats = self._completion_stats(started, durations)
             self.finished_ok.emit(self._out)
 
         except (_Cancelled, _ExporterCancelled):
@@ -438,6 +612,38 @@ class JoinerRenderWorker(QThread):
         width, height, fps = target
         joined = os.path.join(tmpdir, "joined.ts")
 
+        # concat needs one layout and one sample rate across every input, so
+        # the segments have to be normalised to something.  That something was
+        # hardcoded to stereo, which flattened a 5.1 recording every time the
+        # joiner had to re-encode - and the bitrate was pinned at 192k, which
+        # is a stereo figure being spent on six channels.
+        #
+        # Normalise to the WIDEST layout present instead.  Upmixing a stereo
+        # segment puts its content in the front pair and silence elsewhere,
+        # which loses nothing; downmixing a 5.1 one to match a stereo title
+        # card would throw the surround away, which is the mistake this
+        # replaces.
+        from export.audio_repair import layout_name, source_profile
+
+        profiles = [source_profile(seg) for seg in segments]
+        channels = max([c for c, _b in profiles if c] or [2])
+        rates = [b for _c, b in profiles if b]
+        layout = layout_name(channels)
+        rate_text = ("%d kbps" % (max(rates) // 1000) if rates
+                     else "the encoder's own rate")
+        logger.info(
+            "Joiner: re-encoding audio as %s (%d channel(s)) at %s.",
+            layout, channels, rate_text,
+        )
+        self._notes.append((
+            "the scenes were re-encoded to join them",
+            "These scenes did not match closely enough to be joined without "
+            "re-encoding, so the picture was re-encoded and the audio was "
+            "brought to a common shape: %s (%d channel(s)) at %s. Scenes that "
+            "match can be joined losslessly instead."
+            % (layout, channels, rate_text),
+        ))
+
         inputs = []
         filters = []
         labels = []
@@ -469,8 +675,8 @@ class JoinerRenderWorker(QThread):
                 % (i, width, height, width, height, fps, fade, i))
             filters.append(
                 "[%d:a:0]aresample=48000,"
-                "aformat=sample_fmts=fltp:channel_layouts=stereo[a%d]"
-                % (i, i))
+                "aformat=sample_fmts=fltp:channel_layouts=%s[a%d]"
+                % (i, layout, i))
             labels.append("[v%d][a%d]" % (i, i))
 
         filters.append("%sconcat=n=%d:v=1:a=1[outv][outa]"
@@ -485,9 +691,14 @@ class JoinerRenderWorker(QThread):
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             # Keep the source bit depth; see media/pixfmt.py.
             "-pix_fmt", _joiner_pix_fmt(segments),
-            "-c:a", "aac", "-b:a", "192k",
-            "-progress", "pipe:1", joined,
+            "-c:a", "aac",
         ]
+        # No -b:a at all when the source rate cannot be read: the encoder's own
+        # default scales with the channel count, which is closer to right than
+        # any figure invented here.
+        if rates:
+            cmd += ["-b:a", "%dk" % (max(rates) // 1000)]
+        cmd += ["-progress", "pipe:1", joined]
         self._run_with_progress(cmd, total, "Re-encoding and joining scenes…")
         if not os.path.exists(joined):
             raise RuntimeError("Re-encoding the joined video failed.")
@@ -508,8 +719,8 @@ class JoinerRenderWorker(QThread):
                 if line.startswith("out_time_ms="):
                     try:
                         secs = int(line.split("=", 1)[1]) / 1_000_000.0
-                        pct = min(99, 90 + int(9 * secs / total_seconds))
-                        self.progress.emit(pct, label)
+                        pct = min(99, int(100 * secs / total_seconds))
+                        self._report(pct, label, stage="join")
                     except (ValueError, ZeroDivisionError):
                         pass
         finally:
@@ -669,7 +880,7 @@ class JoinerRenderWorker(QThread):
                     (state["ceil"] - state["floor"]) * pct // 100)
             value = max(state["last"], min(99, value))
             state["last"] = value
-            self.progress.emit(value, "Applying profile…")
+            self._report(value, "Applying profile…")
 
         export_ranges(
             joined_ts,
@@ -698,22 +909,45 @@ class JoinerRenderWorker(QThread):
         )
 
     def _finalize(self, joined_ts, durations):
-        """Write the joined .ts out in the requested format."""
+        """Write the joined .ts out in the requested format.
+
+        This is a stage in its own right, with the whole bar, because for MP4
+        it is a full re-encode and by far the longest part of the run.  It
+        used to report a flat 99 before starting and then map its own progress
+        onto 90-99, so it sat pinned at the top for minutes with nothing
+        moving.
+
+        cancel_cb is passed through.  Without it, Cancel during the MP4
+        conversion did nothing at all: the dialog hid itself, the next
+        progress update brought it back, and the encode ran to completion.
+        """
         if self._out_format == "mkv":
-            self.progress.emit(99, "Writing MKV…")
-            _write_mkv_chapters(joined_ts, self._out, durations)
+            self._report(0, "Writing MKV…", stage="finish")
+
+            def _mkv_cb(data):
+                pct = data.get("percent", 0) if isinstance(data, dict) else 0
+                if pct is not None and pct >= 0:
+                    self._report(pct, "Writing MKV…", stage="finish")
+
+            _write_mkv_chapters(
+                joined_ts, self._out, durations,
+                cancel_cb=lambda: self._cancel, progress_cb=_mkv_cb)
+            self._check_cancel()
         elif self._out_format == "mp4":
-            self.progress.emit(99, "Converting to MP4…")
+            self._report(0, "Converting to MP4…", stage="finish")
             codec, interlaced = _probe_video(joined_ts)
 
             def _cb(data):
-                # Keep the bar near the end during the MP4 encode.
                 pct = data.get("percent", 0) if isinstance(data, dict) else 0
-                self.progress.emit(min(99, 90 + pct // 10), "Converting to MP4…")
+                if pct is None or pct < 0:
+                    return                      # busy pulse, not a position
+                self._report(pct, "Converting to MP4…", stage="finish")
 
             _transcode_to_mp4(
                 joined_ts, self._out, codec, interlaced,
-                total_seconds=sum(durations), progress_cb=_cb)
+                total_seconds=sum(durations), progress_cb=_cb,
+                cancel_cb=lambda: self._cancel)
+            self._check_cancel()
         else:
             # Match source (.ts) - the joined file is the output.
             shutil.move(joined_ts, self._out)

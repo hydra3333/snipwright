@@ -30,6 +30,14 @@ _PHASE_LABELS = {
     "verify": "Verifying output",
     "finalise_mkv": "Finalising MKV…",
     "recode_audio": "Recoding…",
+    # Not "Recoding": the repair re-encodes a handful of frames and
+    # copies every other one byte for byte, so calling it a recode
+    # misdescribes both what it does and how long it will take.
+    "repair_audio": "Repairing audio…",
+    # Both streams copied: nothing is being re-encoded, so saying
+    # "Recoding" would be a plain untruth about what is happening to
+    # the file.
+    "repackage_mp4": "Repackaging to MP4…",
     "recode_full": "Major recode required…",
     "rebuild_audio": "Rebuilding audio…",
     "graft_audio": "Copying audio…",

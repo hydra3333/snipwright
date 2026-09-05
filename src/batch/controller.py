@@ -7,6 +7,7 @@ the app.  The dialog is just a view: it reads the controller's jobs and reacts
 to its signals.
 """
 
+import logging
 import os
 
 from PySide6.QtCore import QObject, Signal
@@ -17,6 +18,8 @@ from batch.job import (
 from batch.runner import BatchRunner
 from addons.output_profiles import default_profile_name
 from utils.eta import EtaTracker
+
+log = logging.getLogger("snipwright.batch")
 
 
 def norm_path(path):
@@ -30,6 +33,29 @@ def norm_path(path):
     if not path:
         return ""
     return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def staging_dir():
+    """The folder Queue to Batch writes its staging projects into.
+
+    Must stay in step with the path main.py's _write_queue_project builds, or
+    a staged file would be created in one folder and looked for in another -
+    which is the shape of the fault this cleanup exists to fix, only inverted.
+    """
+    from config.loader import CONFIG_DIR
+    return os.path.join(str(CONFIG_DIR), "queue")
+
+
+def is_staged(path):
+    """Whether a project file is one the application staged for the queue.
+
+    Only these may be deleted.  A user who adds their own .vprj through the
+    Batch Manager keeps it wherever they saved it, and removing that job must
+    leave their file alone - it is their project, not our scratch copy.
+    """
+    if not path:
+        return False
+    return norm_path(os.path.dirname(path)) == norm_path(staging_dir())
 
 
 class BatchController(QObject):
@@ -142,9 +168,16 @@ class BatchController(QObject):
         # would silently lose pending work the moment a network share was down
         # at startup.
         before = len(self.jobs)
+        dropped = [j for j in self.jobs if not self._job_worth_keeping(j)]
         self.jobs = [j for j in self.jobs if self._job_worth_keeping(j)]
         if len(self.jobs) != before:
             self.save_queue()            # persist the pruned list immediately
+            self._discard_staged([j.vprj_path for j in dropped])
+        # Anything left in the staging folder that no job claims is an orphan
+        # from a crash or a kill between writing the project and recording the
+        # job.  Swept here, after the queue is loaded, so a file a job still
+        # needs is never among them.
+        self.sweep_staging()
 
     @staticmethod
     def _job_worth_keeping(job):
@@ -161,6 +194,104 @@ class BatchController(QObject):
     def save_queue(self):
         from config.loader import save_sidecar
         save_sidecar("queue.json", [j.to_dict() for j in self.jobs])
+
+    # ------------------------------------------------------------------ #
+    # Staging files
+    # ------------------------------------------------------------------ #
+
+    def _staged_in_use(self):
+        """Every staging file the jobs still in the queue refer to."""
+        return {
+            norm_path(j.vprj_path) for j in self.jobs
+            if j.vprj_path and is_staged(j.vprj_path)
+        }
+
+    def _discard_staged(self, paths):
+        """Delete the staging projects among `paths` that nothing still needs.
+
+        Called whenever a job leaves the queue.  Queue to Batch writes a fresh
+        time-stamped .vprj under the config folder for every job it stages, and
+        until now nothing ever removed one, so the folder grew without limit
+        for anyone who used the feature regularly.
+
+        Two guards, both of which matter:
+
+        - Only files inside the staging folder are touched, so a project the
+          user added by hand from their own Videos folder is never deleted.
+        - The file is only removed if no remaining job still points at it.  The
+          same recording can legitimately be queued twice, and while the paths
+          are time-stamped and so normally unique, a job removed while another
+          referenced the same path would otherwise delete the survivor's
+          project out from under the runner.
+        """
+        still_needed = self._staged_in_use()
+        for path in paths:
+            if not is_staged(path):
+                continue
+            if norm_path(path) in still_needed:
+                continue
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                # Not worth troubling the user with: the sweep at the next
+                # start will pick it up, and failing to tidy a scratch file is
+                # no reason to make removing a job look like it failed.
+                log.warning("Couldn't remove staged project %s: %s", path, exc)
+
+    def sweep_staging(self, min_age_seconds=3600):
+        """Delete staging projects no job refers to any more.
+
+        The per-removal cleanup above covers the ordinary path, but a crash or
+        a kill between writing the project and adding the job leaves a file
+        behind that nothing will ever claim.  This runs once at start-up, after
+        the queue has been loaded, so every file a job still needs is known.
+
+        The age guard is for a second copy of the application running at the
+        same time: it may have staged a project seconds ago and not yet saved
+        the queue entry that claims it, and deleting that would break a job
+        that is about to run.  An orphan older than the guard cannot be in that
+        window, and anything newer is simply swept on the next start instead.
+        """
+        directory = staging_dir()
+        if not os.path.isdir(directory):
+            return 0
+
+        import time
+
+        keep = self._staged_in_use()
+        cutoff = time.time() - min_age_seconds
+        removed = 0
+
+        try:
+            names = os.listdir(directory)
+        except OSError as exc:
+            log.warning("Couldn't read the batch queue folder %s: %s",
+                        directory, exc)
+            return 0
+
+        for name in names:
+            if not name.lower().endswith(".vprj"):
+                continue
+            path = os.path.join(directory, name)
+            if norm_path(path) in keep:
+                continue
+            try:
+                if os.path.getmtime(path) > cutoff:
+                    continue
+                os.remove(path)
+                removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning("Couldn't remove orphaned staged project %s: %s",
+                            path, exc)
+
+        if removed:
+            log.info("Swept %d orphaned project file(s) from the batch queue "
+                     "folder", removed)
+        return removed
 
     def persist_now(self):
         """Write the queue to disk immediately, callable from the runner
@@ -458,8 +589,10 @@ class BatchController(QObject):
         row = self._row_of(job)
 
         if drop and row >= 0:
+            staged = self.jobs[row].vprj_path
             del self.jobs[row]
             self.save_queue()
+            self._discard_staged([staged])
             self.jobs_changed.emit()
             return
 
@@ -495,6 +628,9 @@ class BatchController(QObject):
         rows = [r for r in rows if r not in protected]
         if not rows:
             return
+        # Collected before the deletions, since the rows shift as they go.
+        staged = [self.jobs[r].vprj_path for r in rows
+                  if 0 <= r < len(self.jobs)]
         for r in sorted(rows, reverse=True):
             if 0 <= r < len(self.jobs):
                 del self.jobs[r]
@@ -502,6 +638,9 @@ class BatchController(QObject):
         if self.runner is not None:
             self.runner.note_removed(rows)
         self.save_queue()
+        # After the list has shrunk, so a path another job still points at is
+        # correctly seen as still needed.
+        self._discard_staged(staged)
         self.jobs_changed.emit()
 
     def move(self, row, delta):
@@ -577,11 +716,13 @@ class BatchController(QObject):
         done_rows = [i for i, j in enumerate(self.jobs) if j.status == DONE]
         if not done_rows:
             return
+        staged = [self.jobs[r].vprj_path for r in done_rows]
         for r in sorted(done_rows, reverse=True):
             del self.jobs[r]
         if self.runner is not None:
             self.runner.note_removed(done_rows)
         self.save_queue()
+        self._discard_staged(staged)
         self.jobs_changed.emit()
 
     def set_job_profile(self, row, name):

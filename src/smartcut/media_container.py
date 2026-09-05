@@ -5,6 +5,7 @@ from typing import cast
 import logging
 import numpy as np
 
+from smartcut.latm import LatmError, LatmRepacketiser
 from smartcut.lazy_packets import LazyAudioPackets
 from av import AudioStream, Packet, VideoStream
 from av import open as av_open
@@ -40,6 +41,116 @@ def ts_to_time(ts: float) -> Fraction:
     return Fraction(round(ts*1000), 1000)
 
 
+def _note_latm_config(track, packet) -> None:
+    """Record this packet's LATM configuration if it declares a new one.
+
+    Called for every audio packet during the index walk, so it has to be
+    cheap: eight bytes off a memoryview, three comparisons and a set lookup.
+    A memoryview rather than bytes(packet) matters - copying every packet of
+    a two-and-a-half-hour recording is the 175 MB of churn LazyAudioPackets
+    exists to avoid.
+
+    The useSameStreamMux short circuit is kept because the format allows it,
+    but do not rely on it: measured on a Channel 4 HD recording, *every* one
+    of 500,483 frames carried its own StreamMuxConfig and not one reused the
+    previous.  What keeps the cost down is the prefix set, not that branch.
+
+    Bytes 3..6 are bits 24-55: the object type, sampling frequency index,
+    channel configuration and the structural flags.  The window stops there
+    deliberately.  latmBufferFullness sits at bits 59-66 - inside the config
+    but different on nearly every frame - so a wider window stops
+    identifying the configuration and starts identifying the frame.  On the
+    same recording, seven bytes gave 11 distinct prefixes on the main track
+    and 103 on the audio description track, against a true count of 2 and 1;
+    four bytes gives exactly 2 and 1, so the full parse runs twice per file
+    instead of a hundred times.
+    """
+    try:
+        head = bytes(memoryview(packet)[:8])
+    except Exception:
+        return
+    if len(head) < 8 or head[0] != 0x56 or (head[1] & 0xE0) != 0xE0:
+        return                                # not LOAS framing
+    if head[3] & 0x80:                        # useSameStreamMux
+        return
+    prefix = head[3:7]
+    try:
+        sig = track.latm_prefixes[prefix]
+    except KeyError:
+        try:
+            rep = LatmRepacketiser(bytes(packet))
+            sig = (rep.object_type, rep.sample_rate, rep.channel_config)
+        except LatmError:
+            # Unparsable frames are skipped by the cutter too, so an
+            # unreadable config is not evidence either way about the file
+            # changing.  Remember it so the parse is not retried per frame.
+            sig = None
+        track.latm_prefixes[prefix] = sig
+    if sig is None:
+        return
+    # Change points, not a set: which configuration applies to a given cut
+    # cannot be answered by a set, and a file that returns to a configuration
+    # it used earlier must record that as a further point.
+    if not track.latm_config_points or track.latm_config_points[-1][1] != sig:
+        track.latm_config_points.append((len(track.packet_pts) - 1, sig))
+
+
+# channelConfiguration (ISO 14496-3 table 1.19) -> ffmpeg channel layout.
+# 0 means "described elsewhere in the AOT-specific config", which this parser
+# does not read, so it is deliberately absent and falls back to the old
+# behaviour rather than guessing.
+_CHANNEL_LAYOUTS = {
+    1: "mono", 2: "stereo", 3: "3.0", 4: "4.0",
+    5: "5.0", 6: "5.1", 7: "7.1",
+}
+
+
+def latm_configs_in_ranges(track, ranges):
+    """Which LATM configurations the kept ranges actually contain.
+
+    Returns (configs, packet_index): the distinct configurations present, in
+    the order they first appear, and the index of a packet carrying the first
+    of them - which is the packet the output stream should be described from.
+
+    The output stream used to be built from track.packets[0] regardless.  On a
+    Channel 4 HD film that is a stereo continuity packet from before the
+    programme started, while 84% of the recording is 5.1, so the header
+    described the wrong thing for almost the whole file.  Cutting the advert
+    breaks out of such a recording leaves every kept range in one
+    configuration, and it is that one the output must declare.
+
+    `ranges` are on the source's own clock, as track.frame_times is.
+    """
+    points = getattr(track, "latm_config_points", None)
+    if not points:
+        return [], 0
+    times = track.frame_times
+    if times is None or len(times) == 0:
+        return [sig for _, sig in points], points[0][0]
+
+    configs = []
+    first_index = None
+    for i, (idx, sig) in enumerate(points):
+        # A configuration runs from its own packet until the next change; the
+        # first one also covers anything before it that the walk did not see.
+        span_start = times[idx] if i else None
+        span_end = times[points[i + 1][0]] if i + 1 < len(points) else None
+        for (r_start, r_end) in ranges:
+            if span_start is not None and span_start >= r_end:
+                continue
+            if span_end is not None and span_end <= r_start:
+                continue
+            if sig not in configs:
+                configs.append(sig)
+                if first_index is None:
+                    first_index = idx
+            break
+    if first_index is None:
+        # No range overlapped anything - fall back to the file's first.
+        return [points[0][1]], points[0][0]
+    return configs, first_index
+
+
 def _multiply_array_by_fraction(args: tuple[np.ndarray, Fraction]) -> np.ndarray:
     """Helper for parallel Fraction array multiplication (must be at module level for pickling)."""
     arr, time_base = args
@@ -57,6 +168,21 @@ class AudioTrack:
     # Timestamps gathered during the index pass; `packets` is built from these
     # once the file has been walked.
     packet_pts: list = field(default_factory=lambda: [])
+    # Distinct LATM StreamMuxConfig signatures seen while walking the file.
+    # Broadcast AAC can change configuration mid-programme - Channel 4 HD runs
+    # continuity and advert breaks in stereo and the programme in 5.1 - and the
+    # output stream is built from one packet, so a file with more than one
+    # entry here cannot be described by a single container-level header.
+    # Cached, because the walk that fills it is skipped on a cache hit.
+    # Change points as (packet_index, (object_type, sample_rate,
+    # channel_config)), so a cut can be asked which configurations IT spans
+    # rather than only which the file contains.
+    latm_config_points: list = field(default_factory=lambda: [])
+    # Raw config-byte prefix -> parsed signature (or None if unparsable), so
+    # the full parse runs once per distinct configuration rather than once per
+    # config-carrying frame.  Not cached: a working set for the walk, not a
+    # result of it.
+    latm_prefixes: dict = field(default_factory=lambda: {})
     frame_times_pts: np.ndarray = field(default_factory = lambda: np.empty(()))
     frame_times: np.ndarray = field(default_factory = lambda: np.empty(()))
 
@@ -306,6 +432,7 @@ class MediaContainer:
                 # 15 GB working set.  The cutter needs random access to the
                 # packets, but it can have that lazily; see LazyAudioPackets.
                 track.packet_pts.append(packet.pts)
+                _note_latm_config(track, packet)
             elif packet.stream.type == 'subtitle':
                 self.subtitle_tracks[stream_index_to_subtitle_track[packet.stream_index]].append(packet)
 

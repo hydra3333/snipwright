@@ -609,6 +609,22 @@ silently doing nothing, and you set the path in the editor.</p>
 when <em>you</em> correct a detection and save the project, because the watcher's output is
 the detector's own guess &mdash; learning from it would compound whatever it got wrong. See
 <a href="#learning">Learning channel logos</a>.</div>
+<h3>Recordings on a network share</h3>
+<p>The watcher keeps a list of the recordings it has already looked at, so it never detects
+the same one twice. A recording that has been deleted is eventually dropped from that list,
+which is what lets a repeat recorded to the same name be picked up again.</p>
+<p>Recordings kept on a NAS or a server need a little care here, because a recording that has
+gone and a recording on a share that is temporarily unavailable look identical. If the share
+is rebooting, under maintenance, or has just been renamed, every recording on it appears to
+have vanished at once &mdash; and a watcher that took that at face value would detect the lot
+again as soon as the share came back.</p>
+<p>So it does not. A folder the watcher cannot read at all is left strictly alone: nothing
+under it is forgotten, however long it stays away, and the watcher's log says which folder it
+could not reach. Anything else that disappears is kept for the period set by
+<strong>Keep missing recordings for (hours)</strong> in the watcher's settings, a day by
+default, and only forgotten once it has stayed missing that long. That covers the harder case
+of a share that is mounted but not actually readable, where the folder itself looks
+perfectly healthy.</p>
 <h3>Ignoring programmes you do not want</h3>
 <p>Not every recording in the folder is yours to worry about. Right-click the tray icon and
 choose <strong>Edit ignore list</strong>, then add one programme title per line, so a
