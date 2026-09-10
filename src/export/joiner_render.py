@@ -32,10 +32,12 @@ logger = logging.getLogger("snipwright")
 from media.frame_index import build_index_sync
 from export.exporter import (
     export_ranges,
+    format_completion_summary,
     _write_mkv_chapters,
     _transcode_to_mp4,
     _count_output_frames,
     _audio_frame_count,
+    _audio_track_info,
     _Cancelled as _ExporterCancelled,
 )
 
@@ -493,9 +495,13 @@ class JoinerRenderWorker(QThread):
                     cancel_cb=lambda: self._cancel,
                     # Not "Export complete": this is an intermediate piece,
                     # and one per scene made a single join look like several
-                    # finished exports in the log.
+                    # finished exports in the log.  Compact for the same
+                    # reason - a scene is only worth reading when something
+                    # went wrong, and the full block buried the summary that
+                    # matters under five that do not.
                     summary_label="Joiner: scene %d of %d rendered:" % (
                         i + 1, n),
+                    summary_compact=True,
                 )
                 self._check_cancel()
                 segments.append(seg)
@@ -535,6 +541,13 @@ class JoinerRenderWorker(QThread):
             # Populated before finished_ok so the caller can read it in the
             # slot, matching how chalkline_worker hands back its own extras.
             self.stats = self._completion_stats(started, durations)
+            # ...and logged here, which it never was.  The figures went only
+            # to ExportCompleteDialog, so a join left a block in the log for
+            # every intermediate scene and nothing at all for the file it
+            # actually produced.  Same formatter as a plain export, so the
+            # two cannot drift.
+            logger.info("\n".join(format_completion_summary(
+                "Joined video complete:", self.stats, notes=self._notes)))
             self.finished_ok.emit(self._out)
 
         except (_Cancelled, _ExporterCancelled):
@@ -583,6 +596,20 @@ class JoinerRenderWorker(QThread):
         cmd = [
             "ffmpeg", "-hide_banner", "-y",
             "-f", "concat", "-safe", "0", "-i", list_path,
+            # -map 0 or ffmpeg keeps ONE audio track and throws the rest away.
+            #
+            # Without it ffmpeg applies its default stream selection, which
+            # picks a single stream of each type - the "best" one - and
+            # discards the others.  Every join therefore lost every audio
+            # track but the first, silently: the scenes were rendered with
+            # both ("smartcut: finished OK (2 audio tracks written)") and the
+            # joined file came out with one.  Found on a BBC ONE South
+            # recording whose audio description track carried real audio and
+            # simply vanished.  Subtitles would go the same way.
+            #
+            # -map 0 takes every stream from the input in its original order,
+            # which is what a lossless join is supposed to mean.
+            "-map", "0",
             "-c", "copy", joined,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -592,6 +619,26 @@ class JoinerRenderWorker(QThread):
                 "Joining the scenes failed.  The clips may not share the same "
                 "format (codec, resolution or frame rate); mixed formats will "
                 "be supported in a later build.\n\n" + tail)
+
+        # Count what came out against what went in.
+        #
+        # The exporter has done this for a long time - see "Audio tracks in
+        # finished file" in export_ranges() - and the joiner did not, which is
+        # why it lost every audio track but the first for as long as it has
+        # existed and said nothing.  The scenes each reported writing two
+        # tracks and the joined file held one, and nothing compared the two
+        # numbers.  A count is cheap next to a join and turns a silent loss
+        # into a line in the log.
+        try:
+            before = len(_audio_track_info(segments[0]))
+            after = len(_audio_track_info(joined))
+        except Exception:
+            before = after = 0
+        if before and after and after < before:
+            logger.warning(
+                "Joiner: the joined file has %d audio track(s) but the scenes "
+                "had %d - %d lost in the join.",
+                after, before, before - after)
         return joined
 
     def _join_reencode(self, segments, tmpdir, target, durations, fades=None):
@@ -924,10 +971,25 @@ class JoinerRenderWorker(QThread):
         if self._out_format == "mkv":
             self._report(0, "Writing MKV…", stage="finish")
 
+            # Keyed on the exporter's phase, not a fixed token, so the rare
+            # reference-decode pass restarts the bar instead of being clamped
+            # flat at the top by the never-backwards rule.  Its label says so
+            # too: a second bar with the same caption reads as a stall.
+            labels = {
+                "verify": "Checking MKV audio…",
+                "verify_reference": "Comparing against the source audio…",
+                "rebuild_audio": "Rebuilding MKV audio…",
+            }
+
             def _mkv_cb(data):
-                pct = data.get("percent", 0) if isinstance(data, dict) else 0
-                if pct is not None and pct >= 0:
-                    self._report(pct, "Writing MKV…", stage="finish")
+                if not isinstance(data, dict):
+                    return
+                phase = data.get("phase") or "finalise_mkv"
+                pct = data.get("percent", 0)
+                if pct is None or pct < 0:
+                    return                      # busy pulse, not a position
+                self._report(pct, labels.get(phase, "Writing MKV…"),
+                             stage="finish:%s" % phase)
 
             _write_mkv_chapters(
                 joined_ts, self._out, durations,

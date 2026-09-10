@@ -147,6 +147,17 @@ VIDEO_OPEN_FILTER = _vf("Videos", ".ts", ".m2ts", ".mkv", ".mp4", ".mov",
 
 log = logging.getLogger("snipwright")
 
+# How many logo-learning jobs may wait behind the one running.
+#
+# Learning decodes a whole recording, so a pass takes minutes and only one
+# runs at a time.  Without a cap, editing a folder of recordings in one
+# sitting would queue a decode for every save and leave the application
+# working for hours after the user had finished.  Eight is well past what
+# anyone edits in one sitting and still bounded; past that the newest save is
+# dropped and the log says so, because a queue nobody will wait for is not
+# more useful for being longer.
+LEARN_QUEUE_MAX = 8
+
 
 class MainWindow(QMainWindow):
 
@@ -350,6 +361,18 @@ class MainWindow(QMainWindow):
         # Background logo learning, when a save has started one.  None when
         # nothing is running; see _maybe_learn_logo().
         self._learn_worker = None
+
+        # The (recording, vprj) pair being learned right now, and the ones
+        # waiting.  Learning decodes a whole recording, so only one runs at a
+        # time - but a save made while one is running is QUEUED rather than
+        # dropped, which is what used to happen.  The pair is what identifies
+        # a job: re-saving the same project should not queue it twice, while
+        # a different recording must not be mistaken for it.
+        self._learn_current = None
+        self._learn_queue = []
+
+        # Channel name of the pass in progress, for the status-bar indicator.
+        self._learn_channel = None
 
         # The joiner list (segments to be joined into one video).  Persists for
         # the lifetime of the window; edited via the Joiner menu.
@@ -673,6 +696,30 @@ class MainWindow(QMainWindow):
 
         self.statusBar().addPermanentWidget(
             self.index_progress
+        )
+
+        #
+        # Logo-learning indicator (status bar, hidden until learning runs)
+        #
+        # showMessage() was the wrong vehicle for this.  It timed out after
+        # fifteen seconds while the decode ran for minutes, so the user was
+        # left with an empty status bar and no sign anything was happening -
+        # and anything else calling showMessage() wiped the notice early.  A
+        # permanent widget cannot be overwritten and stays until the work is
+        # actually done.
+        #
+        # A label rather than a spinner: an indeterminate QProgressBar
+        # animates continuously, which draws the eye for the whole of a
+        # multi-minute background task the user did not ask for.  The text
+        # says what is happening and how many are waiting, which is the part
+        # that matters.
+
+        self.learn_status = QLabel()
+
+        self.learn_status.hide()
+
+        self.statusBar().addPermanentWidget(
+            self.learn_status
         )
 
     def _apply_jump_settings(self):
@@ -1149,9 +1196,25 @@ class MainWindow(QMainWindow):
 
         # One check at a time: a second click while the first is in flight
         # would leave two threads racing to put a dialog on screen.
+        #
+        # The finished thread deletes its C++ object (finished -> deleteLater)
+        # while this attribute keeps the Python wrapper, so a second check can
+        # arrive holding a reference to something already destroyed and
+        # isRunning() raises RuntimeError from shiboken rather than answering.
+        # That crashed the scheduled check for anyone who used the menu item
+        # in the first four seconds after launch.
+        #
+        # A thread whose object has gone is not running, by definition, so the
+        # answer is simply "no" - and the stale reference is dropped so the
+        # next call does not have to work it out again.
         existing = getattr(self, "_update_thread", None)
-        if existing is not None and existing.isRunning():
-            return
+        if existing is not None:
+            try:
+                if existing.isRunning():
+                    return
+            except RuntimeError:
+                pass
+            self._update_thread = None
 
         settings = self.config.setdefault("settings", {})
         if not manual:
@@ -1185,6 +1248,10 @@ class MainWindow(QMainWindow):
         worker.done.connect(self._on_update_result)
         worker.done.connect(thread.quit)
         thread.finished.connect(thread.deleteLater)
+        # Drop our reference as it goes, so the common path never leaves a
+        # wrapper pointing at a deleted object.  The guard above is still
+        # needed for the orderings where deletion beats this.
+        thread.finished.connect(lambda: setattr(self, "_update_thread", None))
         # `manual` can't ride along on the signal, so park it for the handler.
         self._update_manual = manual
         # Keep references, or Python collects the thread mid-flight.
@@ -2446,43 +2513,152 @@ class MainWindow(QMainWindow):
             return
         if not vprj_path.lower().endswith(".vprj"):
             return
-        # One at a time.  Learning decodes the whole recording, and starting
-        # a second pass because the user pressed Ctrl+P twice would double
-        # the load for no gain.
+        # One learn at a time, but the rest are QUEUED rather than dropped.
+        #
+        # This used to return here whenever a worker was running, so saving a
+        # second recording while the first was still learning threw that
+        # second lesson away silently - the user had to notice and save
+        # again.  The comment justified it as stopping a double Ctrl+P
+        # doubling the load, which is right for the SAME project saved twice
+        # and wrong for a different recording, and a bare "is something
+        # running" test cannot tell those apart.  So de-duplicate on the
+        # actual job, and queue anything genuinely new.
+        job = (self.current_filename, vprj_path)
         if getattr(self, "_learn_worker", None) is not None:
+            running = getattr(self, "_learn_current", None)
+            if job == running or job in self._learn_queue:
+                return                      # same recording again - ignore
+            if len(self._learn_queue) >= LEARN_QUEUE_MAX:
+                # An unattended batch could otherwise queue hundreds of
+                # decodes, each one minutes long.  Dropping the newest is
+                # the honest choice: the queue is already longer than anyone
+                # will wait for, and the log says so.
+                log.info("Chalkline learn queue is full (%d) - not queuing %s",
+                         LEARN_QUEUE_MAX, os.path.basename(vprj_path))
+                return
+            self._learn_queue.append(job)
+            log.info("Chalkline queued %s for learning (%d waiting)",
+                     os.path.basename(vprj_path), len(self._learn_queue))
+            self._update_learn_status()
             return
 
+        self._start_learn(job)
+
+    def _start_learn(self, job):
+        """Begin one learning pass.  Returns True if a worker was started."""
+        recording, vprj_path = job
         try:
             from repair.chalkline_worker import ChalklineLearnWorker
         except Exception:
             log.debug("Chalkline learning unavailable", exc_info=True)
-            return
+            return False
 
-        worker = ChalklineLearnWorker(self.current_filename, vprj_path, self)
+        worker = ChalklineLearnWorker(recording, vprj_path, self)
         self._learn_worker = worker
+        self._learn_current = job
         worker.started_learning.connect(self._on_learn_started)
         worker.finished_learning.connect(self._on_learn_finished)
         worker.finished.connect(self._clear_learn_worker)
         worker.start()
+        return True
 
     def _clear_learn_worker(self):
+        """Finish one pass and start the next, if anything is waiting."""
         self._learn_worker = None
+        self._learn_current = None
+        # Drain rather than stop at the first failure: a recording that has
+        # been deleted since it was queued should not strand everything
+        # behind it.
+        while self._learn_queue:
+            if self._start_learn(self._learn_queue.pop(0)):
+                break
+        self._update_learn_status()
+
+    def _update_learn_status(self):
+        """Keep the status-bar indicator in step with the queue.
+
+        Called on every transition rather than only on start and finish, so
+        the count stays truthful when a save is queued behind a running pass.
+        """
+        label = getattr(self, "learn_status", None)
+        if label is None:
+            return
+        if getattr(self, "_learn_worker", None) is None:
+            label.hide()
+            label.clear()
+            return
+        channel = getattr(self, "_learn_channel", None)
+        waiting = len(self._learn_queue)
+        if channel:
+            text = self.tr("Learning %s's logo…") % channel
+        else:
+            text = self.tr("Learning this channel's logo…")
+        if waiting:
+            text += self.tr(" (%d waiting)") % waiting
+        label.setText(text)
+        label.setToolTip(self.tr(
+            "Chalkline is learning from the project you saved, so it can "
+            "detect adverts on this channel more accurately next time. "
+            "This runs in the background and takes a few minutes."))
+        label.show()
+
+    def _log_learn_detail(self, info):
+        """Everything the learning pass measured, into the log.
+
+        Written because a user reported that no logo was stored and the log
+        said only "no logo clear enough to remember" - which names the
+        outcome and none of the evidence.  learn_mask() had already worked
+        out the peak contrast it saw, the threshold it needed, and which of
+        the compactness tests refused the mask, and all of it was discarded
+        before it reached the log.  A user cannot be asked to reproduce a
+        three-hour decode to answer a question the first run had already
+        answered.
+
+        The timing is here for a second reason.  Learning runs the whole of
+        detect() - ffmpeg over the audio, a full decode, shape_track and
+        logo_track - so it should cost roughly what a detection run costs on
+        the same recording.  The same report showed 30 seconds against a
+        three-hour HD recording where a corpus run of the same channel takes
+        at least six minutes.  Printing the elapsed time beside the
+        recording's length turns that from a suspicion into something the
+        next log settles by itself.
+        """
+        secs = info.get("elapsed")
+        dur = info.get("duration")
+        if secs is not None:
+            if dur:
+                log.info("Chalkline learning pass: %.1fs for a %.0fs "
+                         "recording (%.0fx real time)",
+                         secs, dur, (dur / secs) if secs > 0 else 0.0)
+            else:
+                log.info("Chalkline learning pass: %.1fs", secs)
+        # A decode that stopped early looks exactly like a channel with a
+        # faint logo unless the frame count is said out loud.
+        got = info.get("analysis_frames")
+        want = info.get("analysis_expected")
+        if got is not None:
+            if want:
+                pct = 100.0 * got / want
+                log.info("Chalkline analysed %d frames of an expected %d "
+                         "(%.0f%% of the recording)%s", got, want, pct,
+                         " - THE DECODE STOPPED EARLY" if pct < 90.0 else "")
+            else:
+                log.info("Chalkline analysed %d frames", got)
+        for line in info.get("report") or []:
+            log.info("Chalkline logo candidate: %s", line)
 
     def _on_learn_started(self, channel):
-        """Say that learning has begun, not just that it finished.
+        """Show that learning has begun, and keep showing it.
 
-        The decode takes minutes, and the finishing message therefore arrives
-        long after the save that caused it with nothing to explain where it
-        came from - twice now that has read as nothing having happened. This
-        fires only once the cheap guards have passed, so an ordinary save
-        that will teach it nothing stays silent.
+        The decode takes minutes.  The old notice was a 15-second
+        showMessage(), so for almost all of that time nothing on screen said
+        work was in progress - and a user with nothing else to process could
+        reasonably close the application, which discards it.  The indicator
+        is a permanent widget and stays until the queue is empty.
         """
         log.info("Chalkline is learning %s's logo in the background.", channel)
-        self.statusBar().showMessage(
-            self.tr("Project saved. Chalkline is learning %s's logo in the "
-                    "background - this takes a few minutes.") % channel,
-            15000,
-        )
+        self._learn_channel = channel
+        self._update_learn_status()
 
     def _on_learn_finished(self, info):
         """Report what learning made of the saved project - quietly.
@@ -2492,9 +2668,11 @@ class MainWindow(QMainWindow):
         make that improvement look like luck.  Everything else goes to the
         log only.
         """
+        self._log_learn_detail(info)
         if info.get("error"):
             log.warning("Chalkline could not learn from this project: %s",
                         info["error"])
+            self._learn_channel = None
             return
         if info.get("learned"):
             channel = info.get("channel", "this channel")
@@ -2515,7 +2693,9 @@ class MainWindow(QMainWindow):
                 % channel,
                 15000,
             )
+            self._learn_channel = None
             return
+        self._learn_channel = None
         log.info("Chalkline learned nothing from this project: %s",
                  info.get("skipped", "no reason given"))
         for line in info.get("report", []):
@@ -6470,11 +6650,29 @@ class MainWindow(QMainWindow):
 
         # Logo learning is discardable, so it is stopped without asking: it
         # teaches Chalkline something useful but nothing depends on it, and
-        # a prompt about a background task the user never started would be
-        # baffling.  Stopped rather than left running, or Qt destroys a live
-        # QThread on the way out.
+        # the recordings can always be saved again.  Stopped rather than left
+        # running, or Qt destroys a live QThread on the way out.
+        #
+        # It is now SAID rather than done silently.  Discarding work the user
+        # cannot see is one thing; the status bar has been showing "Learning
+        # ..." for minutes, and possibly "(3 waiting)" as well, so vanishing
+        # without a word would look like the work had completed.  Still not a
+        # prompt - the user asked to close, and a question about a background
+        # task they never started would be an obstacle - just a line in the
+        # log and a note they will see if they go looking.
         learner = getattr(self, "_learn_worker", None)
         if learner is not None and learner.isRunning():
+            waiting = len(getattr(self, "_learn_queue", []))
+            if waiting:
+                log.info("Closing while Chalkline was learning; that pass and "
+                         "%d queued after it were discarded. Saving those "
+                         "projects again will teach it the same lessons.",
+                         waiting)
+            else:
+                log.info("Closing while Chalkline was learning; that pass was "
+                         "discarded. Saving the project again will teach it "
+                         "the same lesson.")
+            self._learn_queue = []
             learner.cancel()
             learner.wait(5000)
 

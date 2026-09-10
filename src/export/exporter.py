@@ -1288,7 +1288,7 @@ def _relax_ts_audio_via_mkvmerge(ts_path, exe, cancel_cb=None):
 
 
 def _audio_decode_errors(path, cancel_cb=None, progress_cb=None,
-                         span=(0.0, 1.0)):
+                         span=(0.0, 1.0), phase="verify"):
     """How many decoder complaints the audio produces, across the WHOLE file.
 
     Returns None if the check itself could not be run, which callers treat as
@@ -1323,7 +1323,7 @@ def _audio_decode_errors(path, cancel_cb=None, progress_cb=None,
             "percent": max(1, min(99,
                                   int(round((low + fraction * (high - low))
                                             * 100)))),
-            "phase": "verify",
+            "phase": phase,
             "scene": 1,
             "total_scenes": 1,
         })
@@ -1452,20 +1452,30 @@ def _mkv_audio_ok(mkv_path, cancel_cb=None, reference_path=None,
     whatever the absolute count.  Without a reference, only a clean decode
     counts - the old behaviour.
     """
-    # Half the bar each, since the reference pass is the same work again.
+    # The check gets the WHOLE bar, and the reference pass - when it runs -
+    # starts a fresh one under its own phase.
     #
-    # It only runs when the first pass found complaints, which is the minority
-    # of exports, so every early return below finishes the bar explicitly.
-    # Without that the common case - a clean file - left it sitting at 50%
-    # while the export moved on, which reads as a stall rather than as a check
-    # that passed.
+    # It used to be half the bar each, reserving the top half for a reference
+    # pass that only runs when the first pass finds complaints, which is the
+    # minority of exports. On the common clean file the bar therefore filled
+    # to 50%, `done()` jumped it to 99, and the user saw it leap from half to
+    # full with nothing in between - reported as "gets to 50% and then jumps
+    # straight to 100%". The check really had finished at 50%; the bar was
+    # simply describing work that was not going to happen.
+    #
+    # Reserving space for the rare branch made the common case wrong. Better
+    # to let the common case run edge to edge and treat the rare second pass
+    # as what it is - a second pass, with its own label and its own bar.
+    # `verify_reference` is a distinct phase precisely so a consumer can tell
+    # them apart and restart rather than clamp; consumers that weight phases
+    # fall back to a default for names they do not know.
     def done():
         if progress_cb is not None:
             progress_cb({"percent": 99, "phase": "verify",
                          "scene": 1, "total_scenes": 1})
 
     got = _audio_decode_errors(mkv_path, cancel_cb=cancel_cb,
-                               progress_cb=progress_cb, span=(0.0, 0.5))
+                               progress_cb=progress_cb, span=(0.0, 1.0))
     if got is None:
         done()
         return True            # never block an export on a verification hiccup
@@ -1476,7 +1486,8 @@ def _mkv_audio_ok(mkv_path, cancel_cb=None, reference_path=None,
         done()
         return False
     baseline = _audio_decode_errors(reference_path, cancel_cb=cancel_cb,
-                                    progress_cb=progress_cb, span=(0.5, 1.0))
+                                    progress_cb=progress_cb, span=(0.0, 1.0),
+                                    phase="verify_reference")
     if baseline is None:
         done()
         return False
@@ -3923,6 +3934,7 @@ def export_ranges(
         level_value=0.0,
         markers=None,
         summary_label=None,
+        summary_compact=False,
 ):
     """Cut and export the kept ranges.
 
@@ -4898,34 +4910,79 @@ def export_ranges(
 
     # The completion figures, one per line (like the dialog) so the summary is
     # easy to find in the log later, with any dialog notes/errors echoed below.
-    _dh = int(duration_secs) // 3600
-    _dm = (int(duration_secs) % 3600) // 60
-    _ds = int(duration_secs) % 60
+    #
     # "Export complete" is right for an export the user asked for, and wrong
     # for the intermediate pieces the joiner renders on its way to one file -
     # a five-scene join logged five completed exports and then a sixth, which
     # reads as six output files rather than one.  Callers doing internal work
-    # pass their own label.
-    summary = [
-        summary_label or "Export complete:",
-        "    Output file     : %s" % out_path,
-        "    Video length    : %02d:%02d:%02d" % (_dh, _dm, _ds),
-        "    Video size      : %.0f MB" % (out_size / (1024 * 1024)),
-        "    Output scenes   : %d" % len(keep_ranges),
-        "    Video frames    : %d" % reported_frames,
-        "    Audio frames    : %d" % audio_frames,
-        "    Audio tracks    : %d" % audio_written,
-        "    Processing time : %.1fs" % elapsed,
-        "    Frames/sec      : %.0f" % stats["fps"],
-        "    Video bitrate   : %.2f Mbps" % (video_bitrate / 1_000_000),
-    ]
-    for label, full in notes:
-        summary.append("    * %s - %s" % (label, full))
-    for label, full in errors:
-        summary.append("    ! %s - %s" % (label, full))
-    logger.info("\n".join(summary))
+    # pass their own label, and `summary_compact` to get one line instead of
+    # the twelve-line block: an intermediate piece is only worth reading when
+    # something has gone wrong, so it should not look like a finished export.
+    if summary_compact:
+        logger.info(format_completion_line(
+            summary_label or "Export complete:", stats))
+    else:
+        logger.info("\n".join(format_completion_summary(
+            summary_label or "Export complete:", stats,
+            notes=notes, errors=errors)))
 
     return stats
+
+
+def format_completion_summary(label, stats, notes=(), errors=()):
+    """The completion figures as log lines, one per line, like the dialog.
+
+    Shared by the exporter and the joiner so the two cannot drift apart. The
+    joiner used to compute its figures for `ExportCompleteDialog` and never
+    log them at all, so a join wrote a block per intermediate scene and
+    nothing for the finished file - the one number anybody actually wants.
+
+    `stats` is the dict both produce; `notes` and `errors` are (label, full)
+    pairs, passed separately because the copies inside `stats` are shortened
+    for the dialog and the log has room for the whole thing.
+    """
+    secs = int(stats.get("duration_secs") or 0)
+    lines = [
+        label,
+        "    Output file     : %s" % stats.get("out_path", ""),
+        "    Video length    : %02d:%02d:%02d" % (
+            secs // 3600, (secs % 3600) // 60, secs % 60),
+        "    Video size      : %.0f MB" % (
+            (stats.get("out_size") or 0) / (1024 * 1024)),
+        "    Output scenes   : %d" % (stats.get("scenes") or 0),
+        "    Video frames    : %d" % (stats.get("video_frames") or 0),
+        "    Audio frames    : %d" % (stats.get("audio_frames") or 0),
+        "    Audio tracks    : %d" % (stats.get("audio_tracks") or 0),
+        "    Processing time : %.1fs" % (stats.get("processing_secs") or 0.0),
+        "    Frames/sec      : %.0f" % (stats.get("fps") or 0.0),
+        "    Video bitrate   : %.2f Mbps" % (
+            (stats.get("video_bitrate") or 0) / 1_000_000),
+    ]
+    for lbl, full in notes:
+        lines.append("    * %s - %s" % (lbl, full))
+    for lbl, full in errors:
+        lines.append("    ! %s - %s" % (lbl, full))
+    return lines
+
+
+def format_completion_line(label, stats):
+    """The same figures on ONE line, for work that is not a finished output.
+
+    The joiner's per-scene pieces are intermediates on the way to a single
+    file. Giving each one the full block made a five-scene join look like six
+    exports, and buried the one summary that matters under five that do not -
+    you only look at a scene at all if something went wrong, and then the
+    length and frame count are enough to say which one.
+    """
+    secs = int(stats.get("duration_secs") or 0)
+    return "%s %s (%02d:%02d:%02d, %.0f MB, %d frames, %.1fs)" % (
+        label,
+        os.path.basename(stats.get("out_path", "") or ""),
+        secs // 3600, (secs % 3600) // 60, secs % 60,
+        (stats.get("out_size") or 0) / (1024 * 1024),
+        stats.get("video_frames") or 0,
+        stats.get("processing_secs") or 0.0,
+    )
 
 
 class ExportWorker(QThread):

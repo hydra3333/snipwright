@@ -54,6 +54,9 @@ class _Thumb(QLabel):
 
         # Picture type letter ("I"/"P"/"B") to overlay, or "" for none.
         self.letter = ""
+        # Whether this frame is inside a kept scene.  Drives the band
+        # along the top edge; see _draw_scene_band().
+        self.in_scene = False
 
         # True when the playhead sits on this frame.  Derived rather than
         # assigned: the refresh paths already keep frame_index correct, and
@@ -117,7 +120,11 @@ class _Thumb(QLabel):
         # cursor ring and the picture-type letter.
         super().paintEvent(event)
 
+        # Ring first, then the band inside it - see _draw_scene_band(), which
+        # insets itself past the ring so the two sit side by side rather than
+        # one covering the other.
         self._draw_cursor_ring()
+        self._draw_scene_band()
 
         if not self.letter:
             return
@@ -163,6 +170,39 @@ class _Thumb(QLabel):
         except AttributeError:
             return False
 
+    def _draw_scene_band(self):
+        """Mark a frame inside a kept scene with a band along its top edge.
+
+        Where the boundary is, is then where the band stops - a hard edge
+        between two adjacent thumbnails, which is what someone stepping
+        frame-by-frame towards a cut is actually looking for.  The border
+        alone left that edge one pixel wide.
+        """
+        if not self.in_scene:
+            return
+
+        w = self.width()
+        # On the cursor frame the ring runs along this same top edge, so start
+        # the band below it.  Letting the ring sit on top would eat half the
+        # band on precisely the frame being looked at - the same mistake the
+        # ring itself was created to fix, one layer further in.
+        # Below the border normally, below the ring on the cursor frame - the
+        # ring now occupies the edge, so it is the ring the band clears.
+        inset = _CURSOR_RING if self.is_cursor else _OUTER_BORDER
+        band = _SCENE_BAND
+        if w <= 2 * inset or self.height() <= inset + band + _SCENE_BAND_EDGE:
+            return
+
+        painter = QPainter(self)
+        try:
+            inner_w = w - 2 * inset
+            painter.fillRect(inset, inset, inner_w, band,
+                             QColor(_SCENE_BAND_COLOUR))
+            painter.fillRect(inset, inset + band, inner_w,
+                             _SCENE_BAND_EDGE, QColor(_SCENE_BAND_EDGE_COLOUR))
+        finally:
+            painter.end()
+
     def _draw_cursor_ring(self):
         """Ring the current frame *inside* its own border, not instead of it.
 
@@ -184,7 +224,7 @@ class _Thumb(QLabel):
         if not self.is_cursor:
             return
 
-        inset = _OUTER_BORDER + _CURSOR_GAP
+        inset = 0                      # at the edge; see _CURSOR_RING
         ring = _CURSOR_RING
         w = self.width()
         h = self.height()
@@ -232,9 +272,39 @@ _FRAME_TYPE_COLOURS = {
 # where it competes with black.  Put it back to 1 if the two ever end up in
 # similar colours.
 _OUTER_BORDER = 1
-_CURSOR_GAP = 0
+# The cursor ring sits AT the thumbnail's edge again, where it started.
+#
+# It was moved inside the border to fix a real fault: the cursor style
+# used to replace the border, so the one frame you had just stepped onto
+# was the only one not showing whether it was inside a scene.  That
+# reason is gone.  Scene membership is the band's job now, and the band
+# is drawn separately, so the ring can cover the border without hiding
+# anything.  Inset by a few pixels it just looked odd.
 _CURSOR_RING = 2
 _CURSOR_COLOUR = "#2f9bff"
+
+# A band along the top edge of every frame that is inside a kept scene,
+# drawn over the picture rather than above it.
+#
+# The 1px border was already saying this, and was reported twice as too
+# hard to see - once against a dark scene, once on a bright one where the
+# picture and the border were a similar colour.  A single pixel competing
+# with arbitrary picture content is a losing proposition whatever colour
+# it is, and a strip of hundreds of thumbnails is exactly where it has to
+# read at a glance.
+#
+# Inside the frame, not above it: the user who asked for this pointed at
+# another editor that puts a line above each thumbnail, and noted himself
+# that it costs vertical space.  Overlaying the top few pixels of the
+# picture costs none.
+#
+# The dark hairline under the band is what makes it survive a pale frame.
+# Yellow on white is nearly invisible; yellow with a dark edge under it
+# is not.
+_SCENE_BAND = 4
+_SCENE_BAND_EDGE = 1
+_SCENE_BAND_COLOUR = "#e6c200"
+_SCENE_BAND_EDGE_COLOUR = "#1a1400"
 
 _STYLE_EMPTY = (
     "background:#081420; border:1px solid #222;"
@@ -251,19 +321,67 @@ _STYLE_MARKER = (
     "background:#06121c; border:1px solid #19c3c3;"
 )
 
+# No yellow edge any more - the band along the top says "inside a scene"
+# on its own, and a border repeating it only added a boxed-in look.  It
+# also hurt the frame that matters most: sandwiched between the yellow
+# border outside it and the yellow band inside it, the blue cursor ring
+# read as a muddy line between two yellows rather than as blue.
+#
+# The darker background stays, so the edges still differ a little where
+# the picture does not reach.  Scene MARKERS keep their cyan border:
+# that is a different state with no band of its own, so there the border
+# is carrying the meaning rather than duplicating it.
 _STYLE_SELECTED = (
-    "background:#203000; border:1px solid #e6c200;"
+    "background:#203000; border:1px solid #222;"
 )
 
 _STYLE_NORMAL = (
     "background:#081420; border:1px solid #222;"
 )
 
+# The strip's own background, in BOTH themes.
+#
+# theme.py already says the timeline, thumbnail and scene bars keep dark
+# video-editor colours whatever the theme is, and the timeline and scene bars
+# do - they fill their whole area, so nothing of the window shows through.
+# This bar never set a background at all, so in light mode the gaps around the
+# thumbnails came out #f0f0f0 and the strip sat on a bright panel.
+#
+# That is not cosmetic.  The thumbnails themselves are pixel-identical in the
+# two themes - border, scene band and cursor ring all the same colours - yet
+# the strip was reported as markedly clearer in dark mode.  The whole of that
+# difference was the surround: a yellow band against a bright background has
+# far less to separate it than the same band against a dark one.  The user who
+# asked for clearer cut marks works in light mode, so he had the worse of it.
+#
+# Matched to what the dark theme was already producing, so dark mode is
+# unchanged and light mode gains what it should always have had.
+_STRIP_BACKGROUND = "#333339"
+
 
 class ThumbnailBar(QWidget):
 
     def __init__(self, window):
         super().__init__()
+
+        # Scoped to this class so it styles the strip itself and does not
+        # cascade into the thumbnails, which set their own.
+        #
+        # WA_StyledBackground is REQUIRED, not belt and braces.  A direct
+        # QWidget subclass ignores a style sheet background entirely unless
+        # either this attribute is set or paintEvent draws PE_Widget itself -
+        # Qt paints backgrounds for the widgets it knows about, and a plain
+        # QWidget subclass is not one of them.  Without it the style sheet
+        # below is accepted, applies to nothing, and the strip quietly keeps
+        # the window's own colour.  Shipped once exactly like that.
+        #
+        # Not setAutoFillBackground(): that fills from the PALETTE, which is
+        # the light colour in light mode - the very thing being overridden
+        # here.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "ThumbnailBar { background:%s; }" % _STRIP_BACKGROUND
+        )
 
         # The MainWindow.  Named 'main' to avoid shadowing QWidget.window().
         self.main = window
@@ -509,6 +627,7 @@ class ThumbnailBar(QWidget):
                 label.frame_index = -1
                 label.letter = ""
                 label.clear()
+                label.in_scene = False   # or a cleared slot keeps a stale band
                 label.setStyleSheet(_STYLE_EMPTY)
             return
 
@@ -528,6 +647,7 @@ class ThumbnailBar(QWidget):
                 label.frame_index = -1
                 label.letter = ""
                 label.clear()
+                label.in_scene = False   # or a cleared slot keeps a stale band
                 label.setStyleSheet(_STYLE_EMPTY)
                 continue
 
@@ -555,7 +675,7 @@ class ThumbnailBar(QWidget):
                 label.setPixmap(self._fit_to_label(pixmap, label))
 
             self._apply_letter(label, frame_index)
-            label.setStyleSheet(self._style_for(frame_index))
+            self._apply_style(label, frame_index)
 
     def refresh(self):
         window = self.main
@@ -574,6 +694,7 @@ class ThumbnailBar(QWidget):
                 label.frame_index = -1
                 label.letter = ""
                 label.clear()
+                label.in_scene = False   # or a cleared slot keeps a stale band
                 label.setStyleSheet(_STYLE_EMPTY)
             return
 
@@ -601,6 +722,7 @@ class ThumbnailBar(QWidget):
                 label.frame_index = -1
                 label.letter = ""
                 label.clear()
+                label.in_scene = False   # or a cleared slot keeps a stale band
                 label.setStyleSheet(_STYLE_EMPTY)
                 continue
 
@@ -625,9 +747,7 @@ class ThumbnailBar(QWidget):
             # worker delivers the thumbnail.
             self._apply_letter(label, frame_index)
 
-            label.setStyleSheet(
-                self._style_for(frame_index)
-            )
+            self._apply_style(label, frame_index)
 
         # Hand the uncached thumbnails to the background worker.  Decode them
         # in left-to-right order so the strip fills like a normal load rather
@@ -663,14 +783,26 @@ class ThumbnailBar(QWidget):
         if label.frame_index == frame_index:
             label.setPixmap(self._fit_to_label(pixmap, label))
             self._apply_letter(label, frame_index)
-            label.setStyleSheet(self._style_for(frame_index))
+            self._apply_style(label, frame_index)
 
     def _on_thumb_clicked(self, frame_index):
         # Jump the main window's cursor to the clicked thumbnail's frame.
         self.main.goto_frame(frame_index)
 
+    def _apply_style(self, label, frame_index):
+        """Give a label its border style AND its scene flag, together.
+
+        One method rather than three call sites setting both, because the
+        band along the top edge is painted while the border is styled: they
+        are two mechanisms describing the same fact, and the way to keep them
+        agreeing is to have one place set them.
+        """
+        style, in_scene = self._style_for(frame_index)
+        label.in_scene = in_scene
+        label.setStyleSheet(style)
+
     def _style_for(self, frame_index):
-        """The border style for a frame: which scene it belongs to.
+        """(style, in_scene) for a frame: which scene it belongs to.
 
         The cursor is deliberately not returned here.  It used to be checked
         first and to win, which meant the frame under the cursor was the one
@@ -684,14 +816,15 @@ class ThumbnailBar(QWidget):
         window = self.main
         cursor = frame_index == window.current_frame
 
+        in_scene = any(a <= frame_index <= b
+                       for a, b in window.selection.ranges)
+
         if window.scenes.has_marker(frame_index):
             style = _STYLE_MARKER
+        elif in_scene:
+            style = _STYLE_SELECTED
         else:
             style = _STYLE_NORMAL
-            for range_start, range_end in window.selection.ranges:
-                if range_start <= frame_index <= range_end:
-                    style = _STYLE_SELECTED
-                    break
 
         if cursor:
             # Swap only the background, keeping whichever border the frame's
@@ -699,4 +832,4 @@ class ThumbnailBar(QWidget):
             style = style.replace("background:#081420", "background:#001026")
             style = style.replace("background:#203000", "background:#12240a")
             style = style.replace("background:#06121c", "background:#001026")
-        return style
+        return style, in_scene

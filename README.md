@@ -27,8 +27,12 @@ distilling the part many people relied on most into a free, open-source tool.
   with optional title cards and fades — into one video, joined losslessly
   when the formats match. Select several files in Open Video to fill the
   list in one go.
-- **Automatic commercial detection** via Comskip, with the breaks turned into
-  ready-to-review cuts.
+- **Automatic commercial detection** with **Chalkline**, the built-in
+  detector — nothing to install or configure. It reads the channel logo, the
+  picture shape and the aspect ratio, learns each channel's logo from the edits
+  you save, and reports nothing at all when it cannot tell rather than guessing
+  and removing part of the programme. Breaks become ready-to-review cuts.
+  Comskip is still supported as an alternative if you prefer it.
 - **A background Watcher** that scans your recording folders and prepares
   projects automatically, so they're waiting for you in the Batch Manager. An
   ignore list keeps other people's programmes out of it, and can tidy itself up
@@ -65,8 +69,9 @@ distilling the part many people relied on most into a free, open-source tool.
 - **External tools:**
   - **ffmpeg** — required (PyAV builds against it for decoding/muxing).
   - **mkvmerge** (from MKVToolNix) — required only for MKV output.
-  - **Comskip** — optional, for automatic commercial detection (Tools →
-    Detect Commercials, and the Watcher).
+  - **Comskip** — optional. Snipwright detects adverts with its own built-in
+    Chalkline detector by default, so you only need Comskip if you would
+    rather use it instead (Settings → Advert detection).
     Prebuilt binaries are the easy route; if you want to build it yourself,
     [COMSKIP.md](COMSKIP.md) covers what actually works on Linux and Windows.
 - **A TMDB API key** — optional, only needed for the TV/Film renamers. A free
@@ -142,15 +147,16 @@ python3 src/main.py
 1. **Open a recording** with *Open Video* (or drag one in).
 2. **Find your cuts.** Scrub the timeline, step frame-by-frame, and use the
    thumbnail strip to land exactly where you want.
-3. **Mark scenes** with mark-in / mark-out to define what to keep (or let
-   Comskip pre-mark the commercial breaks for you).
+3. **Mark scenes** with mark-in / mark-out to define what to keep — or let
+   *Tools → Detect Commercials* pre-mark the breaks for you.
 4. **Export.** The default export is a lossless, frame-accurate stream copy;
    choose MKV if you'd prefer that container.
 
 Everything else lives in two places worth a look early on:
 
-- **Settings** — set your working folders, point Snipwright at Comskip and
-  mkvmerge, add your TMDB key, and adjust logging.
+- **Settings** — set your working folders, choose your advert detector, point
+  Snipwright at mkvmerge (and Comskip, if you use it), add your TMDB key, and
+  adjust logging.
 - **The Extras menu** — launch the TV/Film renamers and start the background
   Watcher.
 

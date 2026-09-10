@@ -6,6 +6,171 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.7.0] - 2026-09-10
+
+### Changed
+
+- **The log now says why a channel's logo could not be learned.** It used to
+  record only that nothing was learned, which named the outcome and none of the
+  evidence - so a report of "no logo saved" could not be answered without
+  asking the user to run the whole thing again. It now writes what it measured
+  for each kind of logo it looked for: the strongest contrast it found, the
+  contrast it needed, and which test refused the result. It also records how
+  long the pass took against the length of the recording, which makes an
+  unexpectedly quick pass visible rather than something to be guessed at.
+
+- **You can now see when Chalkline is learning a channel's logo.** Saving a
+  project starts a background pass that reads the whole recording and takes a
+  few minutes, but the message saying so disappeared after fifteen seconds -
+  so for nearly all of that time nothing on screen said work was in progress.
+  It was easy to conclude it had finished, and closing Snipwright cancels the
+  pass. The status bar now keeps a message until the work is genuinely done,
+  and says how many recordings are waiting behind it. Closing still cancels
+  without asking, but now records in the log what was discarded.
+
+- **Cut boundaries are easier to see in the thumbnail strip.** A frame inside a
+  kept scene was marked by a one-pixel border, which is a losing proposition
+  against arbitrary picture content - it was reported as hard to see twice,
+  once against a dark scene and once on a bright one where the picture and the
+  border were a similar colour. Each such frame now carries a band along its
+  top edge, so the boundary is where the band stops between two adjacent
+  thumbnails. The band is drawn over the top of the picture rather than above
+  it, so it costs no height.
+
+  With the band doing that job, the yellow border around those frames has gone
+  - it was saying the same thing twice, and it muddied the blue marker on the
+  frame you are actually on by squeezing it between two yellows. That marker
+  has moved back out to the edge of the thumbnail where it used to sit. Scene
+  markers keep their own border, which is a different thing and still the only
+  thing saying it.
+
+- **The thumbnail strip is now dark in light mode too.** It was the one editor
+  bar without a background of its own, so in light mode the gaps around the
+  thumbnails came out the same near-white as the rest of the window. The
+  thumbnails themselves were identical in both themes, but a yellow cut marker
+  has far less to separate it against a bright surround than a dark one - so
+  the cut marks were noticeably harder to see in light mode for no reason
+  anyone chose. The timeline and scene bars were already dark in both.
+
+### Fixed
+
+- **The Joiner silently dropped every audio track but the first, and the
+  subtitles.** A join is supposed to be lossless, but the finished video kept
+  only one audio track however many the scenes had - so an audio description
+  track, or a second language, was thrown away without a word, and the
+  subtitles with it. Each scene was rendered correctly with all of its audio;
+  the loss happened when the scenes were joined together. Found on a recording
+  whose audio description track carried real audio and simply vanished.
+  Snipwright now also checks the finished join against the scenes it was built
+  from and says so in the log if anything went missing, which is how this
+  should have been caught long ago. Note that joining scenes that do NOT share
+  a format still produces a single audio track, because those have to be
+  re-encoded through a path that can only carry one; that is a separate
+  limitation and is not fixed here.
+
+- **A channel's logo could not be learned from a visually busy programme.**
+  Snipwright works out where a logo sits by finding pixels that are edgier
+  during the programme than during the adverts. That test assumed a logo was
+  the only thing that could raise a pixel, so a programme filled with detail -
+  stone walls, rubble, foliage - measured as edgier than its own smooth advert
+  graphics across the whole picture, and the resulting shape covered almost
+  the entire frame instead of a corner. Snipwright rejected it as too large
+  and learned nothing, even though the logo was plainly visible. Each pixel is
+  now measured against the rest of the frame rather than against zero, so a
+  whole-picture difference cancels out and only what genuinely stands out is
+  kept. On the Channel 4 recording this was found with, the logo is now
+  learned where before nothing was.
+
+- **Automatic advert detection did not work on Windows at all.** Snipwright
+  asks ffmpeg to write scene changes to a temporary file, and the path to that
+  file is given inside an ffmpeg filter description - where a colon separates
+  options and a backslash escapes the next character. Every Windows temporary
+  path begins `C:\`, so ffmpeg read the instruction as nonsense and refused to
+  start. No frames were ever analysed, and the result was reported as "no logo
+  clear enough to remember", which pointed at the recording rather than at the
+  fault. Snipwright now hands ffmpeg a plain filename with no drive letter or
+  folder separators in it, so there is nothing left to misread. Linux and
+  macOS were never affected; on Windows this is the difference between advert
+  detection working and not working at all.
+
+- **Advert detection could report the wrong reason for finding nothing.** When
+  the analysis could not run - the case above being the obvious example - the
+  log still said no logo was clear enough, which is a statement about the
+  picture and sent two separate investigations after the wrong thing. It now
+  reports what actually stopped it.
+
+- **Advert artwork in a corner could split one break into several.** On
+  channels that change picture shape for the adverts, an advert's own logo
+  sitting in the same corner as the channel's could be mistaken for it, and
+  each such moment cut one break into two. On the Talking Pictures recordings
+  this was measured on, a single break contained seven of them - and one
+  recording went from finding half its breaks with four false ones to finding
+  both with a single false one. A remembered logo seen while the picture has
+  changed shape is no longer allowed to hold a break open.
+
+- **Saving a second project while a logo was being learned threw the second
+  one away.** Learning reads the whole recording, so only one runs at a time -
+  but instead of waiting its turn, anything saved while one was in progress was
+  silently discarded. If you worked through several recordings in a sitting,
+  only the first taught Chalkline anything, and nothing told you the rest had
+  been dropped. Saves are now queued and worked through in order, up to eight
+  deep. Re-saving the same project still will not queue it twice.
+
+- **Advert detection could mistake an advert's own artwork for the channel
+  logo.** Snipwright works out where a channel puts its logo by looking for
+  something that stays in one corner, and it assumes that something is present
+  during the programme and absent during the breaks. Things like advert logos
+  and QR codes are the exact opposite - an advert parks its own artwork in a
+  corner and leaves it there, so it is present through the advert and absent
+  through the programme, and gets read as a channel logo that had been missing
+  for the entire show. Corners are now judged on how much of the recording
+  they are actually present for, and one that only appears for a minority of
+  it can no longer outrank a real logo. On the 5STAR recording this was
+  measured with, Snipwright now trims the ten-minute shopping segment that
+  follows the programme to within half a second, where before it removed the
+  programme instead. No other recording in the 30-recording test set changed.
+
+- **Advert detection could remove almost the whole programme.** On a recording
+  where the detector misread which corner held the channel logo, it proposed a
+  single "break" running from the start of the recording to two thirds of the
+  way through, and reported it. The length ceiling that exists to catch
+  exactly this did not apply, because a break touching the very start or end
+  of a recording is allowed to be longer - the PVR's own padding often is. That
+  allowance is still there, but a break at the start or end can no longer take
+  more than half the recording. Measured on a 43-minute 5STAR recording that
+  lost all 25 minutes of programme and kept only the padding; the same run
+  showed no change to any other recording, including the nine legitimate
+  10-13 minute padding trims the allowance was added for.
+
+- **The Joiner did not record its finished video in the log.** It wrote a full
+  completion summary for every scene it rendered on the way to the join, and
+  then nothing at all for the file it actually produced - so the one set of
+  figures worth keeping was the one missing. The finished join now writes the
+  same summary a normal export does. The per-scene entries have been reduced to
+  a single line each: they are intermediate pieces, not finished exports, and
+  giving each one the full block made a five-scene join read as six separate
+  videos in the log.
+
+- **The progress bar stalled at half way when writing an MKV.** The audio check
+  that runs at the end of an MKV export reserved the upper half of the bar for
+  a second comparison pass that only happens when the first pass finds a
+  problem - which is the minority of exports. On a clean file the bar therefore
+  filled to 50% and then jumped straight to the end. The check now uses the
+  whole bar, and the second pass, when it is needed, is shown as a pass of its
+  own with its own label. Affects the Joiner and ordinary MKV exports alike.
+
+- **Checking for updates could crash the editor a few seconds after launch.**
+  The check runs on a worker thread that deletes itself when it finishes, and
+  the next check could arrive still holding a reference to it - asking a
+  destroyed object whether it was still running, which raised an internal
+  error rather than answering. Most likely to be seen by anyone who used
+  *Check for updates* from the menu within the first few seconds of starting,
+  because that made the scheduled check the second one.
+
+- **The Watcher screenshot in the user guide was out of date.** It still showed
+  the settings window without the *Keep missing recordings for (hours)*
+  option added in 2.6.0.
+
 ## [2.6.0] - 2026-09-05
 
 ### Changed

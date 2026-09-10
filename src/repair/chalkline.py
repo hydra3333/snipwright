@@ -123,6 +123,38 @@ GW, GH = 160, 90
 MIN_BREAK = 75.0
 MAX_BREAK = 420.0
 
+# The most of a recording a single boundary-exempt bracket may swallow.
+#
+# A bracket touching the recording's own start or end is exempt from
+# MAX_BREAK, because the PVR's padding legitimately runs to ten minutes and
+# a genuine change of content at the end has nothing on the far side to have
+# overshot into.  That exemption is right and stays - but it was UNBOUNDED,
+# and on 5star the corner search proposed "logo absent from 0.00 to 1995.00"
+# on a 2581s recording.  It touched time zero, so the ceiling did not apply,
+# and the detector reported one 33-minute break that removed all 25.2 minutes
+# of programme and kept nothing but tail padding.  Its sibling bracket, the
+# same span starting at 295s, was correctly dropped as "over 420s and not at
+# an edge" - the exemption was the only thing that let the bad one through.
+#
+# score() called that detection "found 1/1, false 0": the giant bracket
+# overlapped the one real advert, and nothing survived to count as a false
+# positive.  A detector that deletes the programme must not be able to report
+# a clean sheet, which is why this is a hard floor on the OUTPUT rather than
+# another piece of evidence to be weighed.
+#
+# 0.50 sits in a wide flat band, not on a tuned edge.  Across the ten
+# boundary-exempt brackets in run 21 the nine legitimate ones take 5.4% to
+# 31.8% of their recording and the 5star one takes 77.0%; any threshold
+# between roughly 35% and 70% gives the same answer on all ten.  A figure
+# chosen inside a gap that wide is not carrying the result - see
+# MASK_POLARITY_MIN for the same reasoning.
+#
+# This is a guard against catastrophe, not a tuned parameter.  It treats the
+# symptom: the root cause on 5star is the corner search preferring a corner
+# the logo is on 31.5% of the time to one it is on 71.4% of the time, which
+# is a separate question and still open.
+MAX_BOUNDARY_SHARE = 0.50
+
 # The floor a break may reach when a remembered logo mask proposed it.
 #
 # MIN_BREAK is the length below which a bracket is not believed at all, and
@@ -173,6 +205,49 @@ MAX_CLUSTER_ELONGATION = 10.0
 # Persistence levels at which logo brackets are proposed, and how many of
 # them must agree before a bracket is believed.  See logo_brackets().
 LOGO_LEVELS = (12.0, 20.0, 28.0, 40.0)
+
+# The on-fraction at or above which a corner is a plausible PERSISTENT logo.
+#
+# A channel DOG is on through the programme and off through the breaks, and
+# the programme is most of a recording - so a real persistent logo reads as
+# on for roughly two thirds to three quarters of it.
+#
+# A corner on for only a third is not a logo dropping through breaks.  On
+# 5star it was a QR CODE, sitting bottom-right through the 10.6-minute
+# infomercial that follows the programme.  The user spotted it in the
+# recording; the arithmetic confirms it exactly.  The QR code is present for
+# the trailing infomercial and absent for the programme, so the corner
+# search - which assumes what it tracks is ON during programme and OFF
+# during breaks - read it precisely backwards.  Its "logo absent" bracket,
+# 0.00 to 1995.00, is the programme itself: the programme ends at 1943.28,
+# a difference of 52 seconds.  Cutting that "break" removed the show.
+#
+# So the failure is not a marginal logo but an INVERTED one, and the
+# on-fraction is what tells them apart: a real DOG is on for the programme,
+# an advert's artwork is on for the advert.  Expect more of these - a QR
+# code in the corner of an advert is now routine, and nothing about this is
+# specific to 5star or to Channel 5.
+#
+# Used to TIER the corner candidates, not to filter them and not to rank
+# within a tier.  Evidence still decides between corners of the same tier,
+# because evidence is what separates a logo from picture detail and cluster
+# size is known not to - see logo_track() and the Parks and Recreation
+# recording, where a 234px cluster of ordinary picture detail beat the real
+# 58px logo on size alone.  Nothing here reinstates size as a criterion,
+# which matters doubly now: the 5star QR code formed a 157px cluster, the
+# largest in the corpus, and the real 5STAR logo only 76px.
+#
+# 0.50 sits in a wide flat band.  Across the twelve corners chosen over the
+# 30-recording corpus, the eleven that produced usable results are on for
+# 62.9% to 75.3% of their recording; the one that did not is 5star's BR at
+# 31.5%.  Any threshold between roughly 35% and 62% tiers all thirty
+# identically, so this figure is not carrying the result.
+#
+# This is deliberately NOT the 0.30 floor in logo_track(), which answers a
+# different question - whether a corner is modulated enough to bracket a
+# break at all - and would remove candidates rather than rank them.  A
+# recording whose only viable corner sits below this line still uses it.
+LOGO_PERSISTENT_ON = 0.50
 MIN_LEVEL_SUPPORT = 3
 
 # Fewest coincident pixels that can be a logo.  Measured: Sky Mix formed
@@ -191,6 +266,40 @@ EDGE_DISTANCE_COST = 0.04
 LOGO_STORE = os.path.expanduser("~/.config/snipwright/chalkline-logos.json")
 # Mask contrast above which the logo counts as present in a frame.
 MASK_ON = 0.30
+
+# Require the mask to be BRIGHTER than the ring around it before the logo
+# counts as present, not merely edgier.
+#
+# edge_chunk() returns a boolean - (gx + gy) > EDGE_LEVEL - so every technique
+# built on it sees "is there an edge here" and never which way the brightness
+# goes.  That is blind to the one property separating U&Dave's DOG from the
+# Rotorazer infomercial that defeats it: the DOG is white text on dark
+# panelling, the advert is dark green text on white.  Measured on u&dave2 and
+# u&dave3: programme frames are brighter than their surround 99.7% and 99.6%
+# of the time, infomercial frames 0.5% of the time in both, with roughly 65
+# luminance levels between the two means.  See "the remaining U&Dave defects"
+# in CHALKLINE.md.
+#
+# ASSUMES A LIGHT LOGO.  Broadcast DOGs are overwhelmingly white or light and
+# semi-transparent, but nothing guarantees it, and a channel whose logo is
+# darker than its background would have its programme turned into break
+# candidates - the unrecoverable direction.  Storing the polarity per mask at
+# learn time is the correct fix and needs every mask relearned.
+#
+# SHIPPED OFF, deliberately, and differently from the tree this came from.
+# The measurement that decides it is `--polarity-ab`, which derives the gated
+# and ungated brackets from one decode and scores both; until that has been
+# read against the whole corpus this stays off, so an ordinary detection run
+# behaves exactly as the released version does.  A channel REGRESSING under
+# the gate is the signal that polarity must be stored per mask instead.
+MASK_POLARITY_GATE = False
+# Luminance levels the mask must exceed its ring by.  Zero, deliberately: the
+# measured separation is a sign flip with a ~65-level gap, and the brackets
+# were identical anywhere from -8 to +4, so this constant is not carrying the
+# result.  A figure chosen to sit inside a wide flat band is not the kind of
+# invented constant that has cost this file three rounds.
+MASK_POLARITY_MIN = 0.0
+
 # How much more often a pixel must be an edge just after a segment starts
 # than during the rest of the programme before it is taken to be logo.
 MASK_LEARN = 0.35
@@ -267,7 +376,7 @@ class ChalklineCancelled(ChalklineError):
 
 
 def _run_ffmpeg_progress(cmd, duration, label, interval=15.0,
-                         progress_cb=None, cancel_cb=None):
+                         progress_cb=None, cancel_cb=None, cwd=None):
     """Run an ffmpeg command, reporting progress against a known duration.
 
     `-progress pipe:1` gives periodic key=value blocks on stdout, distinct
@@ -304,7 +413,7 @@ def _run_ffmpeg_progress(cmd, duration, label, interval=15.0,
     proc = subprocess.Popen(
         cmd + ["-progress", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        bufsize=1)
+        bufsize=1, cwd=cwd)
     start = time.monotonic()
     last = 0.0
     out_time = 0.0
@@ -608,27 +717,50 @@ def video_signals(video, duration, workdir, verbose=False, progress_cb=None,
     Frames come back as a read-only memmap so nothing here is obliged to hold
     the whole recording in memory.
     """
-    scene_fd, scene_path = tempfile.mkstemp(prefix="addetect-scenes-",
-                                             suffix=".txt")
-    os.close(scene_fd)
+    # The scene file goes in the workdir under a BARE filename, and ffmpeg is
+    # run from there.
+    #
+    # Its path is embedded inside the filter graph, where ffmpeg treats ':'
+    # as an option separator and '\' as an escape.  A Windows temp path is
+    # C:\Users\...\addetect-scenes-x.txt, so the colon ends the option and
+    # every backslash is eaten:
+    #
+    #   Unable to parse option value "UsersPaulTempscenes.txt"
+    #   Error applying option 'mode' to filter 'metadata'
+    #
+    # ffmpeg then never starts, no frames are written, and video_signals()
+    # returns frames=None - so on Windows Chalkline could not analyse
+    # anything at all.  Reported as "no logo clear enough to remember",
+    # which named the wrong thing entirely.
+    #
+    # Escaping the path was tried and is fiddly enough to get wrong twice;
+    # a bare filename has no colon and no separator to escape, so there is
+    # nothing left to get wrong.  The input path is made absolute because
+    # running from the workdir would otherwise break a relative one - which
+    # it did, the first time this was written.
+    scene_name = "addetect-scenes.txt"
+    scene_path = os.path.join(workdir, scene_name)
     path = os.path.join(workdir, "frames.raw")
 
     graph = (f"[0:v]split=2[a][b];"
              f"[a]blackdetect=d={BLACK_D}:pic_th={BLACK_PIC}:"
              f"pix_th={BLACK_PIX},"
              f"select='gt(scene,{SCENE_TH})',"
-             f"metadata=print:file={scene_path}[v1];"
+             f"metadata=print:file={scene_name}[v1];"
              f"[b]fps={FPS},scale={GW}:{GH}[v2]")
     cmd = [
-        "ffmpeg", "-hide_banner", "-nostats", "-i", video,
+        "ffmpeg", "-hide_banner", "-nostats",
+        "-i", os.path.abspath(video),
         "-filter_complex", graph,
         "-map", "[v1]", "-f", "null", "-",
-        "-map", "[v2]", "-pix_fmt", "gray", "-f", "rawvideo", path, "-y",
+        "-map", "[v2]", "-pix_fmt", "gray", "-f", "rawvideo",
+        os.path.abspath(path), "-y",
     ]
     if verbose:
         print("  " + " ".join(cmd[:6]) + " ...", file=sys.stderr)
     text = _run_ffmpeg_progress(cmd, duration, "video signals",
-                                progress_cb=progress_cb, cancel_cb=cancel_cb)
+                                progress_cb=progress_cb, cancel_cb=cancel_cb,
+                                cwd=workdir)
 
     # Put these back on the timebase the rest of the detector expects.
     #
@@ -1145,6 +1277,20 @@ def build_breaks(brackets, events, analysis_end, short_ok=(), verbose=False,
         if b - a < floor:
             note(lo, hi, support,
                  f"refined to {b - a:.1f}s, under {floor:.0f}s")
+            continue
+        # The boundary exemption is bounded.  Measured against the analysed
+        # span rather than the container duration, for the same reason
+        # at_edge is - they are different numbers measured different ways,
+        # and mixing them would make the share depend on which one happened
+        # to be larger.  See MAX_BOUNDARY_SHARE.
+        span = analysis_end if analysis_end > 0 else (duration or 0.0)
+        if (at_edge and span > 0
+                and (b - a) > MAX_BOUNDARY_SHARE * span):
+            note(lo, hi, support,
+                 f"refined to {b - a:.1f}s, "
+                 f"{100.0 * (b - a) / span:.0f}% of the recording - a bracket "
+                 f"at an edge may exceed {MAX_BREAK:.0f}s but not swallow "
+                 f"the programme")
             continue
         if b - a > MAX_BREAK and not at_edge:
             note(lo, hi, support,
@@ -1686,12 +1832,19 @@ def anchor_gaps(anchors):
 
 def detect(video, verbose=False, keep=None, learn=None,
            store_path=LOGO_STORE, channel_override=None,
-           progress_cb=None, cancel_cb=None):
+           progress_cb=None, cancel_cb=None, polarity_ab=False):
     """Find the advert breaks in one recording.
 
     Returns (breaks, info), where breaks is a list of (start, end) in
     seconds - the same REMOVE regions save_vprj_from_cuts() and write_edl()
     both expect.
+
+    `polarity_ab` additionally derives the breaks the MASK_POLARITY_GATE
+    setting would have produced had it been the other way, from the same
+    decode, and returns them as info["polarity_alt"].  The reported breaks
+    are unaffected: the live arm is whatever MASK_POLARITY_GATE says, so a
+    measurement run and an ordinary run agree on the answer.  See
+    MASK_POLARITY_GATE.
 
     `progress_cb(percent, label)` and `cancel_cb()` are for the GUI: the
     three passes report against their own labels, and cancelling raises
@@ -1755,6 +1908,16 @@ def detect(video, verbose=False, keep=None, learn=None,
             return [], {"reason": "no analysis frames"}
         n = frames.shape[0]
         times = np.arange(n) / FPS
+        # How much of the recording the decode actually produced frames for.
+        # A short decode is silent otherwise: every later measurement simply
+        # sees a shorter recording and reports weak contrast rather than a
+        # truncated one, which is indistinguishable from a channel with a
+        # faint logo.  A user reported learning finishing in 30 seconds on a
+        # three-hour recording that takes 6m45s here; without this figure
+        # there is no way to tell a fast machine from a decode that stopped
+        # early.
+        info["analysis_frames"] = int(n)
+        info["analysis_expected"] = int(round(duration * FPS)) if duration else 0
 
         widths, heights = shape_track(frames)
         shape_br, dominant = shape_regions(widths, heights, times)
@@ -1807,6 +1970,10 @@ def detect(video, verbose=False, keep=None, learn=None,
 
         corners = logo_track(frames, times, verbose=verbose)
         mask_br = None
+        # The other arm of the polarity A/B - the brackets the gate would
+        # have produced had it been set the other way.  Stays None outside
+        # --polarity-ab, so nothing about an ordinary run touches it.
+        mask_br_alt = None
         # Spans a remembered mask proposed that survive to become brackets,
         # and so may use the shorter length floor.  Empty unless a mask
         # actually contributes something - see MIN_BREAK_STRONG.
@@ -1847,26 +2014,124 @@ def detect(video, verbose=False, keep=None, learn=None,
         elif channel:
             entry = store_get(load_store(store_path), channel)
             if entry:
-                track = mask_track(frames, mask_to_pixels(entry, box))
+                mask = mask_to_pixels(entry, box)
+                track = mask_track(frames, mask)
                 if track is not None:
-                    present = track > MASK_ON
-                    marks = runs_of(present, times, min_len=2.0, merge_gap=4.0)
+                    ungated = track > MASK_ON
+
+                    # A "logo present" reading taken while the picture is a
+                    # different SHAPE from the rest of the recording is not
+                    # the channel's logo.
+                    #
+                    # Talking Pictures shows 4:3 films and switches to 16:9
+                    # for the breaks, and the DOG goes on the first frame of
+                    # the break.  Adverts park their own artwork in the same
+                    # corner, so the mask reads present for a few seconds at
+                    # a time DURING the break - and each of those readings
+                    # splits one break into two candidates.  Measured over
+                    # run 23: the 240s break at 1610-1850 on tptv contained
+                    # SEVEN such readings, and the three recordings between
+                    # them produced fourteen false positives.
+                    #
+                    # Scoped to spans the shape techniques have ALREADY
+                    # proposed as breaks, not to any frame off the dominant
+                    # shape.  That keeps it to the case where two techniques
+                    # disagree - sar says "the picture changed, this is a
+                    # break", the mask says "logo present, it is not" - and
+                    # settles it in favour of the one that cannot be fooled
+                    # by an advert's own corner artwork.  It cannot invent a
+                    # break on its own: with no shape change there is nothing
+                    # to suppress.  Measured across the whole corpus, only
+                    # the three TPTV recordings change at all.
+                    if sar_br and entry.get("kind") == "persistent":
+                        off_shape = np.zeros(len(times), dtype=bool)
+                        for _lo, _hi in sar_br:
+                            off_shape |= (times >= _lo) & (times <= _hi)
+                        dropped = int((ungated & off_shape).sum())
+                        if dropped:
+                            ungated = merge_absence(ungated,
+                                                    ungated & ~off_shape)
+                            info["mask_offshape_dropped"] = dropped
+                            if verbose:
+                                print(f"    mask: ignored {dropped} present "
+                                      f"frame(s) inside {len(sar_br)} span(s) "
+                                      f"where the picture shape had changed",
+                                      file=sys.stderr)
+
+                    # The polarity gate, and the whole reason both arms can
+                    # be had for one decode.  It is purely subtractive -
+                    # `present &= lum > MASK_POLARITY_MIN` - and works on the
+                    # same `frames` mask_track() has just read, so deriving
+                    # the second arm costs one luminance pass and array
+                    # arithmetic rather than another decode.  A corpus run is
+                    # an hour of the user's machine; two runs would be two,
+                    # and would additionally be comparing two passes that may
+                    # have drifted in some other respect.
+                    #
+                    # This only ever removes presence, which for a persistent
+                    # mask means MORE absence and so more and longer break
+                    # candidates.  That is the direction that eats programme,
+                    # not the safe one: a gate firing wrongly during real
+                    # programme manufactures a break there.  What makes it
+                    # worth measuring is the margin - 99.7% of programme
+                    # frames brighter than their surround against 0.5% of the
+                    # advert's, ~65 levels apart - not the direction.
+                    gated = None
+                    if MASK_POLARITY_GATE or polarity_ab:
+                        lum = mask_lum_track(frames, mask)
+                        if lum is not None:
+                            gated = ungated & (lum > MASK_POLARITY_MIN)
+                            info["mask_polarity_dropped"] = (
+                                int(ungated.sum()) - int(gated.sum()))
+                            if verbose:
+                                print(f"    mask polarity: "
+                                      f"{int(ungated.sum())} present -> "
+                                      f"{int(gated.sum())} after requiring "
+                                      f"brighter than surround",
+                                      file=sys.stderr)
+
                     info["mask_pixels"] = entry["count"]
                     info["mask_kind"] = entry.get("kind")
-                    # A *persistent* logo is on through the programme and off
-                    # through the break, so the stretches where the known mask
-                    # is absent are the breaks themselves.  An intermittent
-                    # logo is absent for most of the programme too, so its
-                    # gaps mean nothing and only the marks are reported.
-                    if entry.get("kind") == "persistent":
-                        # Built down to MIN_BREAK_STRONG rather than
-                        # MIN_BREAK: runs_of() is the first of the two
-                        # length filters, so leaving it at MIN_BREAK would
-                        # discard a short break before build_breaks() ever
-                        # got the chance to judge its edges.
-                        mask_br = runs_of(~present, times,
-                                          min_len=MIN_BREAK_STRONG)
+
+                    def _mask_arm(present):
+                        """Marks and brackets for one presence track.
+
+                        A *persistent* logo is on through the programme and
+                        off through the break, so the stretches where the
+                        known mask is absent are the breaks themselves.  An
+                        intermittent logo is absent for most of the
+                        programme too, so its gaps mean nothing and only the
+                        marks are reported.
+                        """
+                        arm_marks = runs_of(present, times, min_len=2.0,
+                                            merge_gap=4.0)
+                        arm_br = None
+                        if entry.get("kind") == "persistent":
+                            # Built down to MIN_BREAK_STRONG rather than
+                            # MIN_BREAK: runs_of() is the first of the two
+                            # length filters, so leaving it at MIN_BREAK
+                            # would discard a short break before
+                            # build_breaks() ever got the chance to judge
+                            # its edges.
+                            arm_br = runs_of(~present, times,
+                                             min_len=MIN_BREAK_STRONG)
+                        return arm_marks, arm_br
+
+                    # The gate is applied to the live arm only when it is
+                    # actually switched on.  In --polarity-ab the shipped
+                    # behaviour stays the baseline and the gated reading is
+                    # carried alongside it, so the A/B never changes what the
+                    # detector would have reported.
+                    live = gated if (MASK_POLARITY_GATE and gated is not None) \
+                        else ungated
+                    marks, mask_br = _mask_arm(live)
+                    if mask_br is not None:
                         info["mask_brackets"] = len(mask_br)
+
+                    if polarity_ab and gated is not None:
+                        other = ungated if MASK_POLARITY_GATE else gated
+                        alt_marks, mask_br_alt = _mask_arm(other)
+                        info["polarity_alt_marks"] = len(alt_marks)
 
         del frames
     finally:
@@ -1887,9 +2152,45 @@ def detect(video, verbose=False, keep=None, learn=None,
     # the top-left logo yielded one break worth 5.00 in edge evidence, while
     # the two larger clusters yielded no surviving break and no evidence at
     # all.
+    #
+    # Evidence alone is not quite enough, though, and 5star is why: BR, on
+    # 31.5% of the time, beat TL on 71.4% because BR's brackets scored 1.00
+    # against TL's 0.00.  BR was a QR code in the trailing infomercial, so
+    # its "absence" was the programme and breaking on it cost the whole
+    # show.  Candidates are therefore TIERED by whether they look like a
+    # persistent logo at all (see LOGO_PERSISTENT_ON) before evidence
+    # decides between them.  Evidence still decides WITHIN a tier, so
+    # nothing about the Parks and Recreation reasoning is weakened - both of
+    # its clusters would sit in the same tier and be separated by evidence
+    # exactly as before.
     corner, strength, logo_br = None, None, []
-    best_evidence = -1.0
+    best = (-1, -1.0)
+
+    # The mask gets shape suppression (see the mask branch above); the corner
+    # search DELIBERATELY does not.  It was tried, measured over two corpus
+    # runs, and reverted.
+    #
+    # The idea was sound and half of it works: a corner reading taken inside
+    # a span the shape techniques already call a break cannot be trusted,
+    # because an advert parks its own artwork in the same corner.  Applied to
+    # the corner search it bought one false positive on tptv3 (7 -> 6, mean
+    # 56.9s -> 17.3s) and cost 46 seconds of PROGRAMME on tptv: the second
+    # advert's bracket started at 1626.2 against a true 1672.6, because that
+    # recording's shape span begins 62.6 seconds before its break does.
+    #
+    # merge_absence() was written to stop exactly that, and it helped without
+    # being enough - it pulled the proposed edges from 1572 back to 1631, but
+    # the good 1672.5 candidate comes from a higher sustained() persistence
+    # level applied AFTER this point, and clamping to the raw track cannot
+    # reach it.  Run 29 scored identically to run 28.
+    #
+    # A false positive is recoverable and removed programme is not, so the
+    # trade was refused.  Anyone reopening this needs to clamp against the
+    # sustained() output per level rather than the raw presence track, and
+    # should read runs 27-29 first: three corpus runs bought one clear
+    # improvement, and it came from the mask, not from here.
     for name, size, on in corners:
+        on_frac = float(on.mean())
         brackets = logo_brackets(on, times)
         evidence = 0.0
         for lo, hi, _support in brackets:
@@ -1897,12 +2198,15 @@ def detect(video, verbose=False, keep=None, learn=None,
             _b, sb = refine_edge(hi, events, (lo, hi), "end")
             if MIN_BREAK <= _b - _a <= MAX_BREAK:
                 evidence += sa + sb
+        tier = 1 if on_frac >= LOGO_PERSISTENT_ON else 0
         if verbose:
             print(f"    corner {name}: {len(brackets)} brackets, "
-                  f"evidence {evidence:.2f}", file=sys.stderr)
-        if evidence > best_evidence:
+                  f"evidence {evidence:.2f}, on {100 * on_frac:.1f}% "
+                  f"({'persistent' if tier else 'too intermittent to lead'})",
+                  file=sys.stderr)
+        if (tier, evidence) > best:
             corner, strength, logo_br = name, size, brackets
-            best_evidence = evidence
+            best = (tier, evidence)
 
     # A remembered mask only fills spans the corner search left uncovered,
     # rather than competing with it everywhere it also has a bracket.
@@ -1926,35 +2230,52 @@ def detect(video, verbose=False, keep=None, learn=None,
     # bracket there overlaps both of the corner's, so it is filtered out here
     # just as it already lost the competition before; this does not fix that
     # split, only stops the mask winning a tie it never earned.
-    if mask_br is not None:
-        uncovered = [
-            (lo, hi) for lo, hi in mask_br
-            if not any(min(hi, d) - max(lo, c) > 0
-                       for c, d, _s in logo_br)
-        ]
-        # An anchor covering this span is a more complete reading than a
-        # mask fragment, the same principle as the shape suppression below -
-        # not because the mask shares any measurement with the anchor the
-        # way shape does, but because a fragment is a fragment regardless of
-        # which technique produced it.  Confirmed directly on itv1-4: an
-        # unrelated advert's own logo, positioned within ITV1's tracked
-        # mask footprint, gave a brief false "logo present" reading that
-        # truncated the mask's bracket 72 seconds short of the true end
-        # (support 4, evidence 2.00, refined to (2465.14, 2687.65)) - and it
-        # then outranked the anchor's accurate, complete span (evidence
-        # 1.60, refined to (2465.14, 2760.06), within a few seconds of
-        # truth) purely because its wrong edge happened to coincide with
-        # stronger local evidence.  See CLAUDE.md for the full trace.
-        uncovered = [
-            (lo, hi) for lo, hi in uncovered
-            if not any(min(hi, d) - max(lo, c) > 0 for c, d in anchor_br)
-        ]
-        logo_br = logo_br + [
-            (lo, hi, len(LOGO_LEVELS)) for lo, hi in uncovered]
-        # Only these spans earn the shorter floor.  Recorded after the
-        # overlap filtering above, so a mask bracket that lost to the corner
-        # search or to an anchor does not smuggle the relaxation in with it.
-        mask_short_ok = list(uncovered)
+    def _assemble(arm_mask_br, arm_verbose):
+        """Everything downstream of the mask, for one presence arm.
+
+        Split out so the polarity A/B can run it twice against one decode.
+        Nothing in here touches `frames` - they have already been released -
+        so a second call costs bracket arithmetic and edge refinement only,
+        which is seconds against the hour a corpus run takes.
+
+        `logo_br` is REBOUND below rather than mutated, and that is the whole
+        reason this takes a local copy: the first arm used to extend the
+        enclosing list, so the second arm would have started from brackets
+        the first had already added to it.
+        """
+        logo_br_arm = list(logo_br)
+        mask_short_ok_arm = []
+        if arm_mask_br is not None:
+            uncovered = [
+                (lo, hi) for lo, hi in arm_mask_br
+                if not any(min(hi, d) - max(lo, c) > 0
+                           for c, d, _s in logo_br_arm)
+            ]
+            # An anchor covering this span is a more complete reading than a
+            # mask fragment, the same principle as the shape suppression
+            # below - not because the mask shares any measurement with the
+            # anchor the way shape does, but because a fragment is a
+            # fragment regardless of which technique produced it.  Confirmed
+            # directly on itv1-4: an unrelated advert's own logo, positioned
+            # within ITV1's tracked mask footprint, gave a brief false "logo
+            # present" reading that truncated the mask's bracket 72 seconds
+            # short of the true end (support 4, evidence 2.00, refined to
+            # (2465.14, 2687.65)) - and it then outranked the anchor's
+            # accurate, complete span (evidence 1.60, refined to (2465.14,
+            # 2760.06), within a few seconds of truth) purely because its
+            # wrong edge happened to coincide with stronger local evidence.
+            # See CLAUDE.md for the full trace.
+            uncovered = [
+                (lo, hi) for lo, hi in uncovered
+                if not any(min(hi, d) - max(lo, c) > 0 for c, d in anchor_br)
+            ]
+            logo_br_arm = logo_br_arm + [
+                (lo, hi, len(LOGO_LEVELS)) for lo, hi in uncovered]
+            # Only these spans earn the shorter floor.  Recorded after the
+            # overlap filtering above, so a mask bracket that lost to the
+            # corner search or to an anchor does not smuggle the relaxation
+            # in with it.
+            mask_short_ok_arm = list(uncovered)
 
     # Shape brackets carry full support: they have no persistence level to
     # disagree about, and where both techniques apply the shape edges are
@@ -1980,34 +2301,35 @@ def detect(video, verbose=False, keep=None, learn=None,
     # complete reading and the newer one (mask) had to defer to it; here
     # the newer technique is the more complete reading, so it is shape that
     # defers.
-    shape_for_brackets = [
-        (lo, hi) for lo, hi in shape_br
-        if not any(min(hi, d) - max(lo, c) > 0 for c, d in anchor_br)
-    ]
-    brackets = [(lo, hi, len(LOGO_LEVELS)) for lo, hi in shape_for_brackets]
-    brackets += logo_br
-    brackets += [(lo, hi, len(LOGO_LEVELS)) for lo, hi in sar_br]
-    brackets += [(lo, hi, len(LOGO_LEVELS)) for lo, hi in anchor_br]
+        shape_for_brackets = [
+            (lo, hi) for lo, hi in shape_br
+            if not any(min(hi, d) - max(lo, c) > 0 for c, d in anchor_br)
+        ]
+        brackets = [
+            (lo, hi, len(LOGO_LEVELS)) for lo, hi in shape_for_brackets]
+        brackets += logo_br_arm
+        brackets += [(lo, hi, len(LOGO_LEVELS)) for lo, hi in sar_br]
+        brackets += [(lo, hi, len(LOGO_LEVELS)) for lo, hi in anchor_br]
 
-    if verbose:
-        # Every candidate, with its span and which technique proposed it.
-        # The old log gave counts only, so a bracket that existed and a
-        # bracket that never did looked identical from the outside - and
-        # the counts are printed after the fact, by which point the spans
-        # have been discarded.
-        named = (
-            [("shape", lo, hi) for lo, hi in shape_for_brackets]
-            + [("logo", lo, hi) for lo, hi, _s in logo_br]
-            + [("sar", lo, hi) for lo, hi in sar_br]
-            + [("anchor", lo, hi) for lo, hi in anchor_br]
-        )
-        print(f"  {len(named)} candidate bracket(s) into build_breaks:",
-              file=sys.stderr)
-        for who, lo, hi in sorted(named, key=lambda n: n[1]):
-            short = " [short floor]" if (lo, hi) in set(
-                mask_short_ok or []) else ""
-            print(f"    {who:7} {lo:8.2f} - {hi:8.2f} "
-                  f"({hi - lo:6.1f}s){short}", file=sys.stderr)
+        if arm_verbose:
+            # Every candidate, with its span and which technique proposed it.
+            # The old log gave counts only, so a bracket that existed and a
+            # bracket that never did looked identical from the outside - and
+            # the counts are printed after the fact, by which point the spans
+            # have been discarded.
+            named = (
+                [("shape", lo, hi) for lo, hi in shape_for_brackets]
+                + [("logo", lo, hi) for lo, hi, _s in logo_br_arm]
+                + [("sar", lo, hi) for lo, hi in sar_br]
+                + [("anchor", lo, hi) for lo, hi in anchor_br]
+            )
+            print(f"  {len(named)} candidate bracket(s) into build_breaks:",
+                  file=sys.stderr)
+            for who, lo, hi in sorted(named, key=lambda n: n[1]):
+                short = " [short floor]" if (lo, hi) in set(
+                    mask_short_ok_arm or []) else ""
+                print(f"    {who:7} {lo:8.2f} - {hi:8.2f} "
+                      f"({hi - lo:6.1f}s){short}", file=sys.stderr)
 
     # Fallback only.  BBC One carries no logo and does not change shape, and
     # correctly proposing nothing is the right answer for it - which is
@@ -2029,19 +2351,45 @@ def detect(video, verbose=False, keep=None, learn=None,
     # discarded.  That was enough to close the old gate, so the fallback was
     # never reached and the recording came back completely empty: found 0/3.
     # Ask what survived, not what was offered.
-    analysis_end = times[-1] if len(times) else 0.0
-    breaks = build_breaks(
-        brackets, events, analysis_end,
-        short_ok=mask_short_ok, verbose=verbose, duration=duration,
-    ) if brackets else []
+        analysis_end = times[-1] if len(times) else 0.0
+        arm_breaks = build_breaks(
+            brackets, events, analysis_end,
+            short_ok=mask_short_ok_arm, verbose=arm_verbose,
+            duration=duration,
+        ) if brackets else []
 
-    coincidence_br = []
-    if not breaks:
-        coincidence_br = coincidence_brackets(events)
-        if coincidence_br:
-            breaks = build_breaks(
-                brackets + coincidence_br, events, analysis_end,
-                verbose=verbose, duration=duration)
+        arm_coincidence = []
+        if not arm_breaks:
+            arm_coincidence = coincidence_brackets(events)
+            if arm_coincidence:
+                arm_breaks = build_breaks(
+                    brackets + arm_coincidence, events, analysis_end,
+                    verbose=arm_verbose, duration=duration)
+
+        # If nothing distinguishes anything, report nothing.  BBC One is what
+        # this keeps correctly empty rather than inventing a break from black
+        # frames alone - which is precisely what Comskip does on it.
+        #
+        # The two reasons are reported separately because they are genuinely
+        # different failures and reading one as the other cost a diagnosis: a
+        # recording whose brackets were all discarded looks identical in the
+        # log to one where no technique had anything to say, and the second
+        # reading sends you looking at the techniques instead of at
+        # build_breaks().
+        arm_reason = None
+        if not arm_breaks:
+            if not brackets and not arm_coincidence:
+                arm_reason = "no technique proposed a break"
+            else:
+                arm_reason = "no proposed bracket survived refinement"
+
+        return arm_breaks, {
+            "logo_brackets": len(logo_br_arm),
+            "coincidence_brackets": len(arm_coincidence),
+            "reason": arm_reason,
+        }
+
+    breaks, arm = _assemble(mask_br, verbose)
 
     info.update({
         "channel": channel,
@@ -2050,29 +2398,33 @@ def detect(video, verbose=False, keep=None, learn=None,
         "logo_corner": corner,
         "logo_cluster": strength,
         "shape_brackets": len(shape_br),
-        "logo_brackets": len(logo_br),
+        "logo_brackets": arm["logo_brackets"],
         "sar_brackets": len(sar_br),
         "anchor_brackets": len(anchor_br),
-        "coincidence_brackets": len(coincidence_br),
+        "coincidence_brackets": arm["coincidence_brackets"],
         "events": len(events),
         "marks": marks,
     })
+    if arm["reason"]:
+        info["reason"] = arm["reason"]
 
-    # If nothing distinguishes anything, report nothing.  BBC One is what
-    # this keeps correctly empty rather than inventing a break from black
-    # frames alone - which is precisely what Comskip does on it.
-    #
-    # The two reasons are reported separately because they are genuinely
-    # different failures and reading one as the other cost a diagnosis: a
-    # recording whose brackets were all discarded looks identical in the log
-    # to one where no technique had anything to say, and the second reading
-    # sends you looking at the techniques instead of at build_breaks().
-    if not breaks:
-        if not brackets and not coincidence_br:
-            info["reason"] = "no technique proposed a break"
-        else:
-            info["reason"] = "no proposed bracket survived refinement"
-        return [], info
+    # The other arm of the polarity A/B.  Run second and kept entirely out of
+    # `info`'s own keys, so the reported result is the live arm's and reads
+    # identically to a run without --polarity-ab.  Silent regardless of
+    # verbosity: interleaving two runs' bracket traces makes both unreadable,
+    # and the scores are what this mode is for.
+    if polarity_ab and mask_br_alt is not None:
+        alt_breaks, alt_arm = _assemble(mask_br_alt, False)
+        info["polarity_alt"] = alt_breaks
+        info["polarity_alt_reason"] = alt_arm["reason"]
+        info["polarity_gate_live"] = bool(MASK_POLARITY_GATE)
+    elif polarity_ab:
+        # No mask, or no persistent mask, so the gate has nothing to act on
+        # and both arms are the same run.  Said explicitly rather than left
+        # absent, because "no difference" and "not measured" are different
+        # answers and the corpus log has to be able to tell them apart.
+        info["polarity_alt"] = None
+        info["polarity_gate_live"] = bool(MASK_POLARITY_GATE)
 
     return breaks, info
 
@@ -2233,7 +2585,30 @@ def learn_mask(frames, times, starts, programme, breaks, box, report=None):
 
     best = None
     for name, a, b in trials:
-        contrast = windows[id(a)] / a.sum() - windows[id(b)] / b.sum()
+        raw = windows[id(a)] / a.sum() - windows[id(b)] / b.sum()
+
+        # Measure each pixel against the REST OF THE FRAME, not against zero.
+        #
+        # `raw` is "how much more often is this pixel an edge during the
+        # programme than during the breaks".  A logo gives a few pixels a
+        # large positive figure.  But so does content: a programme full of
+        # stone walls and rubble is edgier everywhere than the smooth graphics
+        # in its adverts, which lifts the WHOLE frame above the threshold.
+        # Measured on a Channel 4 recording of a renovation series - peak
+        # contrast +0.61 against a 0.35 threshold, and the resulting mask
+        # spanned 94% x 91% of the picture, so it was rejected as not compact
+        # and the channel's logo was never learned even though it is plainly
+        # visible.
+        #
+        # Subtracting the median removes that whole-frame shift and leaves
+        # what actually stands out.  Only a POSITIVE median is subtracted: if
+        # the breaks are the edgier material the shift runs the other way,
+        # and subtracting it would lower the bar rather than raise it.  So
+        # this can only ever make the test harder, never easier - it cannot
+        # invent a logo, only decline to see one in a frame-wide difference.
+        baseline = max(0.0, float(np.median(raw)))
+        contrast = raw - baseline
+
         why = []
         mask = _clean_mask(contrast > MASK_LEARN, box, ew, eh, why)
         if mask is not None and mask.sum() < MIN_CLUSTER:
@@ -2247,9 +2622,11 @@ def learn_mask(frames, times, starts, programme, breaks, box, report=None):
         if mask is None:
             if report is not None:
                 reason = why[0] if why else "nothing above threshold"
+                extra = (f", frame-wide shift {baseline:+.2f} removed"
+                         if baseline > 0.01 else "")
                 report.append(f"{name}: peak contrast "
                               f"{contrast.max():+.2f} (need "
-                              f"{MASK_LEARN:+.2f}) - {reason}")
+                              f"{MASK_LEARN:+.2f}){extra} - {reason}")
             continue
         score = float(contrast[mask].mean())
         if best is None or score > best[0]:
@@ -2268,6 +2645,44 @@ def learn_mask(frames, times, starts, programme, breaks, box, report=None):
         "box": [(xs.min() - left) / w, (ys.min() - top) / h,
                 (xs.max() - xs.min() + 1) / w, (ys.max() - ys.min() + 1) / h],
     }
+
+
+def merge_absence(on_original, on_suppressed):
+    """Let suppression JOIN absences without moving their outer edges.
+
+    Blanking a presence reading inside a shape change fixes the case it was
+    built for - an advert's corner artwork splitting one break into pieces -
+    but it also lets a bracket's OUTER edge slide to the edge of the shape
+    span.  That is only safe if the span is tight around the break, and it is
+    not always: on tptv the span for the second break starts at 1610.0 while
+    the break starts at 1672.6, so suppressing the whole span moved the
+    bracket 46 seconds into the programme.  Cutting programme is the
+    unrecoverable direction, and one recording losing 46 seconds is a worse
+    outcome than the false positives the suppression removes.
+
+    So each merged absence is clamped back to the first and last frame that
+    was absent WITHOUT suppression.  Interior fragments still join up - which
+    is the whole point - but an edge can only ever move inward, never out
+    into material the original reading called present.
+    """
+    absent_orig = ~on_original
+    absent_merged = ~on_suppressed
+    out = np.zeros(len(absent_merged), dtype=bool)
+    n = len(absent_merged)
+    i = 0
+    while i < n:
+        if not absent_merged[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and absent_merged[j]:
+            j += 1
+        # The run is [i, j).  Keep only as far as the original agreed.
+        idx = np.nonzero(absent_orig[i:j])[0]
+        if len(idx):
+            out[i + idx[0]:i + idx[-1] + 1] = True
+        i = j
+    return ~out
 
 
 def mask_to_pixels(entry, box):
@@ -2309,6 +2724,49 @@ def mask_track(frames, mask, pad=6):
         sl = slice(i, min(i + 512, n))
         out[sl] = e[:, mask].mean(axis=1) - e[:, around].mean(axis=1)
         del e
+    return out
+
+
+def mask_lum_track(frames, mask, pad=6):
+    """Signed luminance: mean inside the mask minus mean in the ring around it.
+
+    mask_track()'s companion, and the same geometry - the difference is that
+    this keeps the sign.  edge_chunk() thresholds into a boolean, so a mask
+    full of dark text on white reads identically to one full of white text on
+    dark.  A channel DOG is light; the advert artwork that defeats the mask on
+    U&Dave is dark.  See MASK_POLARITY_GATE.
+
+    Raw 0-255 levels, not normalised, so a value reads as "this many levels
+    brighter than its surround".
+
+    Costs one pass over the frames but no edge detection, so it is cheaper
+    than mask_track() and can be computed beside it without a second decode.
+    That is what lets the polarity gate be scored both ways from a single
+    corpus run - see --polarity-ab.
+    """
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        return None
+    eh, ew = GH - 1, GW - 1
+    y0, y1 = max(0, ys.min() - pad), min(eh, ys.max() + pad + 1)
+    x0, x1 = max(0, xs.min() - pad), min(ew, xs.max() + pad + 1)
+    around = np.zeros((eh, ew), dtype=bool)
+    around[y0:y1, x0:x1] = True
+    around &= ~mask
+    if around.sum() == 0:
+        return None
+
+    n = frames.shape[0]
+    out = np.zeros(n)
+    for i in range(0, n, 512):
+        # edge_chunk() drops the last row and column, so the mask grid is
+        # (GH-1, GW-1).  Take the same corner of the raw frames to line up -
+        # indexing the full frame with this mask would raise, and slicing the
+        # wrong corner would silently offset every measurement by a pixel.
+        block = np.asarray(frames[i:i + 512, :eh, :ew]).astype(np.float32)
+        sl = slice(i, min(i + 512, n))
+        out[sl] = block[:, mask].mean(axis=1) - block[:, around].mean(axis=1)
+        del block
     return out
 
 
@@ -2465,6 +2923,73 @@ def split_truth(cuts, duration):
     return adverts, padding
 
 
+def _padding_edges(found, padding, duration):
+    """How accurately the head and tail trims were placed.
+
+    `score()` deliberately excludes padding from found/false - counting the
+    PVR's three-minute head and ten-minute tail as missed breaks makes any
+    detector look terrible, and that exclusion is load-bearing.  But it also
+    meant trim accuracy was never measured AT ALL, on any recording, in any
+    batch run.  A whole class of defect was invisible: the U&Dave infomercial
+    that two rounds of work have targeted lives entirely in the head trim, and
+    the polarity gate's one clear success - taking u&dave2 from 121 seconds
+    short to 0.26 - did not move a single number in the summary.
+
+    Only the INNER edge of each padding region is scored.  A head trim runs
+    from 0, and a tail trim to the end of the recording; those outer edges are
+    right by construction and scoring them would dilute the figure with two
+    guaranteed zeros per recording.  What is worth knowing is where the trim
+    STOPS at the head, and where it STARTS at the tail.
+
+    A padding region with no bracket OVERLAPPING it counts as missed rather
+    than as an error of zero, because "trimmed nothing" and "trimmed
+    perfectly" are opposite outcomes and averaging them together would hide
+    the worse one.
+
+    Candidates are found by OVERLAP with the padding region, not by starting
+    within PADDING_TOLERANCE of the recording's edge.  The first version of
+    this did the latter and was badly wrong: refine_edge() snaps a bracket's
+    outer edge to the nearest black frame or silence, which on a real
+    recording is typically several seconds in - itv1-3 refined to 6.59,
+    itv1-4 to 11.91, more4 to 14.83, itv4 to 19.58.  All four had their head
+    trimmed correctly and all four were scored "never cut", which made the
+    detector look as though it ignored padding on three quarters of the
+    corpus when it does nothing of the kind.  The same tolerance was cutting
+    off tails ending 7 to 35 seconds short.
+
+    Overlap also keeps the case that matters most.  A bracket running from
+    the recording's start straight through the padding and into the
+    programme - 5star's 0.00 to 1988.74 against a true head of 389.20 - is
+    not contained in the padding and would vanish under a containment test,
+    taking the +1599.54 reading with it.  That reading is the only thing that
+    showed the programme being destroyed, so it has to survive.
+    """
+    errors, missed = [], 0
+    for a, b in padding:
+        head = a <= PADDING_TOLERANCE
+        tail = b >= duration - PADDING_TOLERANCE
+        if head and tail:
+            # One cut covering the whole recording - nothing was kept, so
+            # there is no meaningful inner edge to measure.
+            continue
+        # Anything overlapping this padding region at all.
+        over = [d for d in found if min(d[1], b) - max(d[0], a) > 0]
+        if not over:
+            missed += 1
+            continue
+        if head:
+            # The earliest overlapping bracket is the head trim; its END is
+            # the edge being measured.  Earliest rather than furthest-reaching
+            # because a trim split into fragments should report where the
+            # FIRST one stops - that is where kept padding starts again.
+            errors.append(min(over, key=lambda d: d[0])[1] - b)
+        else:
+            # Mirror image: the latest overlapping bracket is the tail trim
+            # and its START is the edge.
+            errors.append(max(over, key=lambda d: d[1])[0] - a)
+    return errors, missed
+
+
 def score(found, vprj):
     truth, duration = parse_vprj(vprj)
     adverts, padding = split_truth(truth, duration)
@@ -2487,11 +3012,22 @@ def score(found, vprj):
             errors += [real[bi][0] - a, real[bi][1] - b]
     within5 = sum(1 for e in errors if abs(e) <= 5.0)
     mean = sum(abs(e) for e in errors) / len(errors) if errors else 0.0
+    # Measured against the FULL detected list, not `real`: the head and tail
+    # brackets are precisely the ones `real` has just thrown away.
+    pad_errors, pad_missed = _padding_edges(
+        found, padding, max(duration, max((b for _a, b in truth), default=0.0)))
+    pad_mean = (sum(abs(e) for e in pad_errors) / len(pad_errors)
+                if pad_errors else 0.0)
     return {
         "breaks": len(adverts), "found": matched,
         "false": len(real) - matched,
         "edges": len(errors), "within5": within5, "mean_error": mean,
         "errors": errors,
+        "pad_edges": len(pad_errors),
+        "pad_within5": sum(1 for e in pad_errors if abs(e) <= 5.0),
+        "pad_mean_error": pad_mean,
+        "pad_missed": pad_missed,
+        "pad_errors": pad_errors,
     }
 
 
@@ -2763,6 +3299,7 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     if on_start is not None:
         on_start(key)
 
+    started = time.monotonic()
     try:
         _breaks, detected = detect(
             video,
@@ -2778,6 +3315,20 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     except Exception as exc:
         raise ChalklineError(f"Learning the channel logo failed:\n{exc}")
 
+    # What the pass actually cost and what it looked at.  Learning runs the
+    # whole of detect() - ffmpeg over the audio, a full decode, shape_track
+    # and logo_track - before it ever reaches the mask, so a figure that
+    # looks too fast for the recording's length means something was skipped
+    # and is worth knowing about.  A user's log reporting 30 seconds for a
+    # three-hour HD recording is what prompted this: without the length and
+    # the elapsed time side by side there was no way to tell an unexpectedly
+    # quick machine from a pass that never really ran.
+    info["elapsed"] = time.monotonic() - started
+    info["duration"] = detected.get("duration")
+    info["fps"] = detected.get("fps")
+    info["analysis_frames"] = detected.get("analysis_frames")
+    info["analysis_expected"] = detected.get("analysis_expected")
+
     info["report"] = detected.get("learn_report", [])
     if detected.get("learned"):
         info["learned"] = detected["learned"]
@@ -2786,7 +3337,15 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     else:
         # learn_mask() rejects a mask it cannot believe in, which is most of
         # them.  Not a failure: the corner search carries on as before.
-        info["skipped"] = "no logo clear enough to remember"
+        #
+        # But detect() may have given up long before reaching the mask - if
+        # the decode produced no frames, for instance - and it says so in
+        # `reason`.  That was thrown away here, so a user whose analysis had
+        # not run at all was told the logo was not clear enough, which sent
+        # two people looking at the logo instead of at the decode.  Report
+        # what actually happened when detect() knows.
+        info["skipped"] = (detected.get("reason")
+                           or "no logo clear enough to remember")
     return info
 
 
@@ -2812,6 +3371,12 @@ def main():
                          "the recording, for both learning and lookup; needed "
                          "when two PVRs key the same channel differently - "
                          "see channel_key()")
+    ap.add_argument("--polarity-ab", action="store_true",
+                    help="also report what the MASK_POLARITY_GATE setting "
+                         "would have produced the other way round, derived "
+                         "from the same decode; with --score both are "
+                         "scored.  The reported breaks are unaffected - see "
+                         "MASK_POLARITY_GATE")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -2827,7 +3392,8 @@ def main():
                  "breaks": adverts}
 
     breaks, info = detect(args.video, args.verbose, args.keep, learn,
-                          args.logo_store, args.channel)
+                          args.logo_store, args.channel,
+                          polarity_ab=args.polarity_ab)
 
     if info.get("learned"):
         print(f"learned {info.get('learned_kind')} logo for "
@@ -2870,14 +3436,62 @@ def main():
         except Exception as e:
             print(f"could not write .vprj: {e}", file=sys.stderr)
 
-    if args.score:
-        r = score(breaks, args.score)
-        print(f"  found {r['found']}/{r['breaks']}, false {r['false']}, "
+    def _report_score(found, label=None):
+        r = score(found, args.score)
+        tag = f"[{label}] " if label else ""
+        print(f"  {tag}found {r['found']}/{r['breaks']}, "
+              f"false {r['false']}, "
               f"{r['within5']}/{r['edges']} edges within 5s, "
               f"mean {r['mean_error']:.2f}s")
         if r["errors"]:
-            print("  errors: " +
+            print(f"  {tag}errors: " +
                   "  ".join(f"{e:+.2f}" for e in r["errors"]))
+        # Head and tail trims, on their own line and never folded into the
+        # figures above.  They are a different question - how much padding was
+        # removed, not which breaks were found - and averaging the two would
+        # let a good trim mask a missed break or the reverse.
+        if r["pad_edges"] or r["pad_missed"]:
+            miss = (f", {r['pad_missed']} not trimmed"
+                    if r["pad_missed"] else "")
+            print(f"  {tag}padding {r['pad_within5']}/{r['pad_edges']} "
+                  f"edges within 5s, mean {r['pad_mean_error']:.2f}s{miss}")
+            if r["pad_errors"]:
+                print(f"  {tag}padding errors: " +
+                      "  ".join(f"{e:+.2f}" for e in r["pad_errors"]))
+        return r
+
+    if args.polarity_ab:
+        # Name the arms by what they ARE rather than by "live" and "other",
+        # so a log stays readable if the shipped default is ever flipped.
+        live_name = "gate on" if info.get("polarity_gate_live") else "gate off"
+        alt_name = "gate off" if info.get("polarity_gate_live") else "gate on"
+        alt = info.get("polarity_alt")
+        if alt is None:
+            print("polarity A/B: no persistent mask applied - "
+                  "both arms are the same run")
+        else:
+            dropped = info.get("mask_polarity_dropped")
+            print(f"polarity A/B: {live_name} reported {len(breaks)} break(s), "
+                  f"{alt_name} reported {len(alt)}"
+                  + (f"; gate removed {dropped} present frame(s)"
+                     if dropped is not None else ""))
+            for a, b in alt:
+                print(f"  [{alt_name}] break {a:8.2f} - {b:8.2f} "
+                      f"({b - a:6.1f}s)")
+            if info.get("polarity_alt_reason"):
+                print(f"  [{alt_name}] no breaks reported: "
+                      f"{info['polarity_alt_reason']}")
+
+    if args.score:
+        if args.polarity_ab and info.get("polarity_alt") is not None:
+            live_name = "gate on" if info.get(
+                "polarity_gate_live") else "gate off"
+            alt_name = "gate off" if info.get(
+                "polarity_gate_live") else "gate on"
+            _report_score(breaks, live_name)
+            _report_score(info["polarity_alt"], alt_name)
+        else:
+            _report_score(breaks)
     return 0
 
 
