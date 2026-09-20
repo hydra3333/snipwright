@@ -9,6 +9,13 @@ class SelectionManager:
         self.pending_in = None
         self.pending_out = None
 
+        # Which markers the user has placed since the last scene or cut was
+        # committed.  finish_edit() deliberately leaves the markers in place
+        # so a boundary can be nudged and re-added; this records which of them
+        # are FRESH, which is what tells a nudge apart from a half-marked new
+        # scene.  See the inverted-span guard in commit_range().
+        self._marked_since_commit = set()
+
         #
         # Saved keep ranges
         #
@@ -47,8 +54,13 @@ class SelectionManager:
 
         `editing_index` is still cleared - that tracks which scene is being
         edited, and the edit really has finished.
+
+        `_marked_since_commit` is cleared too, so commit_range() can tell a
+        marker the user has just placed from one left over from this scene.
+        See the inverted-span guard there.
         """
         self.editing_index = None
+        self._marked_since_commit = set()
 
     def clear_all(self):
 
@@ -76,6 +88,7 @@ class SelectionManager:
     ):
 
         self.pending_in = frame
+        self._marked_since_commit.add("in")
 
     def set_out(
             self,
@@ -83,6 +96,7 @@ class SelectionManager:
     ):
 
         self.pending_out = frame
+        self._marked_since_commit.add("out")
 
     def commit_range(self):
 
@@ -90,6 +104,26 @@ class SelectionManager:
             self.pending_in is None
             or
             self.pending_out is None
+        ):
+            return False
+
+        # Refuse a span that runs BACKWARDS from a leftover marker.
+        #
+        # The markers survive a commit on purpose (see finish_edit), so after
+        # adding a scene the OUT still sits at that scene's end.  Mark IN for
+        # the next scene, forget the OUT, press Add - and IN is now AFTER OUT.
+        # min/max quietly turned that into the span between the two, which
+        # then overlapped the neighbouring scenes and REPLACED them: a user
+        # reported losing two scenes this way, having marked one point.
+        #
+        # Only when a single fresh marker is involved.  Marking OUT and then
+        # IN deliberately is still fine - both are fresh, so the user means
+        # that span and min/max is doing what they asked.  And the nudge case
+        # the markers exist for is untouched, because nudging IN back a frame
+        # keeps it BEFORE the OUT.
+        if (
+            self.pending_in > self.pending_out
+            and len(self._marked_since_commit) < 2
         ):
             return False
 
@@ -223,14 +257,26 @@ class SelectionManager:
         return result
 
     def adjust_cut(self, old_start, old_end, new_start, new_end):
-        """Replace the existing cut `old_start`..`old_end` with a new span.
+        """Replace one existing cut with a new span.  See replace_cuts()."""
+        if None in (old_start, old_end):
+            return False
+        return self.replace_cuts([(old_start, old_end)], new_start, new_end)
+
+    def replace_cuts(self, olds, new_start, new_end):
+        """Replace every cut in `olds` with the single span new_start..new_end.
 
         Cut Mode's equivalent of re-marking a scene in Scene Mode: it lets a
         cut be nudged or resized rather than only ever grown.  Restoring the
-        old cut and applying the new one happen together, as a single undo
+        old cuts and applying the new one happen together, as a single undo
         step.
+
+        Takes a LIST because a marked span can overlap more than one cut -
+        mark across two advert breaks and the material between them is being
+        claimed as well, so all of them are restored first and the new span
+        applied once.  Replacing only the first would leave the second sitting
+        inside what the user just marked.
         """
-        if None in (old_start, old_end, new_start, new_end):
+        if new_start is None or new_end is None:
             return False
 
         if new_start > new_end:
@@ -238,7 +284,9 @@ class SelectionManager:
 
         self.push_undo_state()
 
-        restored = self._union_into(self.ranges, old_start, old_end)
+        restored = self.ranges
+        for old_start, old_end in olds:
+            restored = self._union_into(restored, old_start, old_end)
         self.ranges = self._subtract_from(restored, new_start, new_end)
 
         # Keep the markers, as subtract_range and commit_range do.  This is the

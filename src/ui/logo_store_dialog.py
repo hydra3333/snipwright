@@ -44,10 +44,15 @@ from repair.chalkline import (
     GH,
     GW,
     LOGO_STORE,
+    MASK_HISTORY_MAX,
+    active_index,
     load_store,
+    mask_history,
+    same_mask,
     save_store,
     store_display_name,
     store_service_id,
+    write_history,
 )
 
 # The thumbnail is drawn as blocks at the mask's own scale, one block per
@@ -294,17 +299,45 @@ class LogoStoreDialog(QDialog):
             self.table.setItem(i, self.COL_SID, sid)
 
             kind = entry.get("kind") or ""
-            logo = QTableWidgetItem(
-                self.tr("%(count)dpx %(kind)s")
-                % {"count": int(entry.get("count", 0)), "kind": kind}
-            )
+            history = mask_history(entry)
+            text = (self.tr("%(count)dpx %(kind)s")
+                    % {"count": int(entry.get("count", 0)), "kind": kind})
+            if len(history) > 1:
+                text = (self.tr("%(logo)s, best of %(held)d")
+                        % {"logo": text, "held": len(history)})
+            logo = QTableWidgetItem(text)
             logo.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            # What each logo this channel holds has done on the projects the
+            # user corrected - the evidence the choice above rests on.
+            lines = []
+            for item in history:
+                record = item["record"].get("on", {})
+                line = self.tr(
+                    "%(count)dpx: %(seen)d project(s), "
+                    "%(false)d invented break(s)"
+                ) % {
+                    "count": int(item["mask"].get("count", 0)),
+                    "seen": len(record),
+                    "false": sum(r.get("false", 0) for r in record.values()),
+                }
+                if same_mask(item["mask"], entry):
+                    line += self.tr(" - in use")
+                lines.append(line)
+            logo.setToolTip("\n".join(lines))
             self.table.setItem(i, self.COL_LOGO, logo)
 
             contrast = QTableWidgetItem("%.2f" % float(entry.get("contrast", 0)))
             contrast.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             contrast.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, self.COL_CONTRAST, contrast)
+
+            # On every cell of the row, not just the one that happens to name
+            # the mask.  The user went looking for this on the logo picture -
+            # the column actually HEADED "Logo" - and found nothing there.
+            for col in range(self.table.columnCount()):
+                cell = self.table.item(i, col)
+                if cell is not None:
+                    cell.setToolTip("\n".join(lines))
 
         self._filling = False
         if not channels:
@@ -400,7 +433,7 @@ class LogoStoreDialog(QDialog):
             if not self._confirm_merge(entry, clash, typed):
                 self._fill_table()
                 return
-            self._merge(entry, clash, typed)
+            self._merge(entry, clash, typed, old)
             self._fill_table()
             return
 
@@ -416,28 +449,42 @@ class LogoStoreDialog(QDialog):
             self.tr("Remembered logos"),
             self.tr(
                 "\u201c%s\u201d already has a logo of its own. Joining them "
-                "keeps the clearer of the two masks and uses it for both "
-                "names.\n\nJoin them?"
+                "keeps both logos under the one name, and Snipwright uses "
+                "whichever does better on the projects you correct."
+                "\n\nJoin them?"
             ) % typed,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         ) == QMessageBox.Yes
 
-    def _merge(self, entry, clash, typed):
-        """Join two rows, keeping the mask with the higher contrast.
+    def _merge(self, entry, clash, typed, old=None):
+        """Join two rows, keeping BOTH masks under one entry.
 
-        Contrast is the measured separation between the logo's own pixels and
-        those around it, so it is an objective answer to "which of these two
-        templates is better" - and it is already stored, so nothing has to be
-        recomputed.  The discarded one is named in the status line rather
-        than vanishing quietly.
+        This used to keep whichever mask had the higher contrast and throw
+        the other away, on the reasoning that contrast is an objective
+        measure of a template.  It is not a comparable one: contrast is
+        measured on the recording each mask was learned from, and the corpus
+        has twice shown the higher-contrast mask to be the worse one - ITV1's
+        5px mask (0.812) beat its 10px mask (0.721) in a join and then read
+        the SD recording's logo 0% of the time, and in 2.6.19 a fuller
+        Channel 4 mask gave one more false positive than the sparser one.
+
+        So nothing is thrown away.  The joined entry holds both masks, and
+        the projects the user corrects decide between them - see
+        mask_history() and pick_active() in chalkline.py.  The mask in use
+        stays the one the typed name was already being detected with, until
+        the other beats it on a recording they have both been scored against.
         """
+        # The name being typed over goes, exactly as it does on a rename
+        # that does not collide: the user is saying this entry is "typed",
+        # not what it was called.  Its OTHER keys - a service id - stay, and
+        # so do the clash's.  Keeping the old name here was how one entry
+        # ended up answering to both "ITV1" and "ITV1 HD", two different
+        # pictures, with one mask between them.
         keys = list(dict.fromkeys(
-            list(entry.get("keys", [])) + list(clash.get("keys", []))
+            [k for k in entry.get("keys", []) if k != old]
+            + list(clash.get("keys", []))
         ))
-        keep, drop = (entry, clash)
-        if float(clash.get("contrast", 0)) > float(entry.get("contrast", 0)):
-            keep, drop = (clash, entry)
 
         channels = self._channels()
         # Located by identity, not by value.  list.index() and "in" both
@@ -458,26 +505,34 @@ class LogoStoreDialog(QDialog):
             ))
             return
 
-        merged = dict(keep)
+        # Both histories, the clash's first: the typed name is already being
+        # detected with its mask, so that is the incumbent and it keeps its
+        # place until the evidence says otherwise.
+        history = mask_history(clash)
+        incumbent = active_index(clash, history)
+        for item in mask_history(entry):
+            if not any(same_mask(item["mask"], h["mask"]) for h in history):
+                history.append(item)
+        history = history[:MASK_HISTORY_MAX]
+        merged = write_history(dict(clash), history, incumbent)
         merged["keys"] = keys
-        # The merged entry takes the edited row's place, so it is always
-        # `clash` that goes - never `drop`.  Removing `drop` is wrong
-        # whenever the clash row held the better mask: `drop` is then the
-        # edited entry, which the line above has just replaced, so it is no
-        # longer in the list and nothing gets removed at all.
+        # The merged entry takes the EDITED row's place and the clash row is
+        # the one removed, whichever mask ends up in use.  An earlier version
+        # removed whichever entry lost the contrast comparison, which did
+        # nothing at all when that was the edited row - it had already been
+        # replaced on the line above and was no longer in the list.
         channels[at] = merged
         clash_at = next((i for i, e in enumerate(channels) if e is clash), -1)
         if clash_at >= 0:
             del channels[clash_at]
 
         self._status.setText(self.tr(
-            "Joined into one entry, keeping the %(keep)dpx mask (contrast "
-            "%(kc).2f) over the %(drop)dpx one (contrast %(dc).2f)."
+            "Joined into one entry holding %(held)d logo(s), using the "
+            "%(use)dpx one for now. Correct a detection on this channel and "
+            "save it, and the better logo will be chosen on the evidence."
         ) % {
-            "keep": int(keep.get("count", 0)),
-            "kc": float(keep.get("contrast", 0)),
-            "drop": int(drop.get("count", 0)),
-            "dc": float(drop.get("contrast", 0)),
+            "held": len(mask_history(merged)),
+            "use": int(merged.get("count", 0)),
         })
 
     # -- actions ------------------------------------------------------------

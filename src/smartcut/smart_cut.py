@@ -4,6 +4,7 @@ from fractions import Fraction
 from typing import Protocol, TypeAlias
 
 import av
+import numpy as np
 from av.container.output import OutputContainer
 from av.packet import Packet
 
@@ -111,6 +112,65 @@ def make_adjusted_segment_times(positive_segments: list[tuple[Fraction, Fraction
         adjusted_segment_times.append((s + media_container.start_time, e + media_container.start_time))
     return adjusted_segment_times
 
+# A forward step between consecutive video frames larger than this is taken to
+# be the clock jumping, not time passing.  Sixty seconds is far beyond any
+# reordering or field spacing, and beyond the short gaps a weak signal leaves -
+# those keep their length in the output exactly as they always have.  The
+# jumps this exists for are measured in hours.
+CLOCK_JUMP_MIN_SECONDS = 60
+
+
+def find_clock_jumps(media_container: MediaContainer) -> list[tuple[Fraction, Fraction]]:
+    """Places where the source's video clock leaps forward mid-recording.
+
+    Returns (split_time, amount) pairs in seconds.  split_time sits halfway
+    across the gap, so audio and subtitles - which run a little ahead of or
+    behind the video either side of it - fall on the correct side.  amount is
+    the gap less the stream's ordinary step (its median spacing), so the
+    frames either side end up one step apart.  The step just before the gap
+    is no guide: a broadcaster's splice often drops pictures there, and the
+    one this was written for had a four-field step in that position.
+
+    Only forward leaps are recognised.  A 33-bit timestamp wrap reaches here
+    already unwrapped by the demuxer, as a forward leap; that is the form one
+    of the two recordings this was written for arrived in.
+    """
+    video = media_container.video_stream
+    pts = getattr(media_container, "video_frame_times_pts", None)
+    if video is None or video.time_base is None or pts is None or len(pts) < 3:
+        return []
+    tb = Fraction(video.time_base)
+    steps = np.diff(pts)
+    threshold = int(CLOCK_JUMP_MIN_SECONDS / tb)
+    leaps = np.nonzero(steps > threshold)[0]
+    if not len(leaps):
+        return []
+    # A field or a frame, depending on how the stream is coded.
+    usual = max(1, int(np.median(steps)))
+    jumps = []
+    for i in leaps:
+        i = int(i)
+        gap = int(steps[i])
+        split = (int(pts[i]) + gap / Fraction(2)) * tb
+        amount = (gap - min(usual, gap)) * tb
+        jumps.append((split, amount))
+    return jumps
+
+
+def mark_clock_jumps(cut_segments: list[CutSegment],
+                     jumps: list[tuple[Fraction, Fraction]]) -> None:
+    """Attach each clock jump to the segment whose span contains it."""
+    if not jumps:
+        return
+    for seg in cut_segments:
+        inside = tuple(
+            (split, amount) for split, amount in jumps
+            if seg.start_time < split < seg.end_time
+        )
+        if inside:
+            seg.clock_jumps = inside
+
+
 def make_cut_segments(media_container: MediaContainer,
         positive_segments: list[tuple[Fraction, Fraction]],
         keyframe_mode: bool = False
@@ -162,6 +222,11 @@ def smart_cut(media_container: MediaContainer, positive_segments: list[tuple[Fra
 
     adjusted_segment_times = make_adjusted_segment_times(positive_segments, media_container)
     cut_segments = make_cut_segments(media_container, adjusted_segment_times, video_settings.mode == VideoExportMode.KEYFRAMES)
+    clock_jumps = find_clock_jumps(media_container)
+    mark_clock_jumps(cut_segments, clock_jumps)
+    for split, amount in clock_jumps:
+        print(f"Source clock jumps {float(amount):.3f}s at {float(split):.3f}s; "
+              "closing the gap in the output")
 
     if video_settings.mode == VideoExportMode.RECODE:
         for c in cut_segments:

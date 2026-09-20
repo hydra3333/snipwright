@@ -14,15 +14,29 @@ can be unit-tested in isolation.
 import os
 import re
 
-# S05E11 / s05e11 / S05.E11, optionally followed by further episodes that must
-# each carry their own 'E' (E12, -E12, E12E13).  Requiring the 'E' on extras
-# stops quality tags like '1080' being mistaken for an episode number, and the
-# extra separator excludes whitespace so a Plex-style title that follows a
-# " - " (e.g. "S03E21 - E2", where "E2" is the episode title) isn't swallowed
-# as a second episode.
+# S05E11 / s05e11 / S05.E11, optionally followed by further episodes.
+#
+# Two forms of "further episode", and the difference matters:
+#
+#   E12, -E12, E12E13      - a bare 'E' and NO whitespace allowed.  Requiring
+#                            the 'E' stops quality tags like '1080' being read
+#                            as an episode, and excluding whitespace stops a
+#                            Plex-style title after " - " being swallowed:
+#                            "S03E21 - E2", where "E2" IS the episode title.
+#
+#   S01E02, & S01E02       - the FULL season-and-episode repeated, where
+#                            whitespace and '&' or ',' ARE allowed.  A title
+#                            fragment does not repeat the season number, so
+#                            there is nothing here to mistake it for, and this
+#                            is how recorders commonly name a double episode:
+#                            "Stargate SG-1 - S01E01 S01E02 - Children of the
+#                            Gods.mkv".  That was read as episode 1 alone.
 _SXXEXX = re.compile(
     r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee](?P<ep>\d{1,3})"
-    r"(?P<extra>(?:[._-]*[Ee]\d{1,3})+)?"
+    r"(?P<extra>(?:"
+    r"[._-]*[Ee]\d{1,3}"
+    r"|[\s._&,+-]*[Ss]\d{1,2}[\s._-]*[Ee]\d{1,3}"
+    r")+)?"
 )
 
 # 1x02 / 01x02 / 12x05, with optional multi-parters 1x02-03 or 1x02x03.  The
@@ -95,7 +109,18 @@ def _match_se(stem):
             continue
         season = int(m.group("season"))
         episodes = [int(m.group("ep"))]
-        for extra_ep in re.findall(r"\d{1,3}", m.group("extra") or ""):
+        extra = m.group("extra") or ""
+        # How to read the extras depends on which form matched.  The SxxExx
+        # ones carry an 'E' before every episode, and a repeated "S01E02"
+        # also carries a SEASON - so scan for numbers after an 'E' only, or
+        # the season digit is taken for an episode and the ascending check
+        # below stops on it, losing the real episode behind it.  The 1x02-03
+        # form has no 'E' anywhere and its extras are bare numbers.
+        if re.search(r"[Ee]\d", extra):
+            extra_nums = re.findall(r"[Ee](\d{1,3})", extra)
+        else:
+            extra_nums = re.findall(r"\d{1,3}", extra)
+        for extra_ep in extra_nums:
             n = int(extra_ep)
             # A genuine multi-episode tag ascends (E21E22).  Anything not
             # greater than the previous episode is a title fragment that merely

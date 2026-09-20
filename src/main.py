@@ -732,9 +732,9 @@ class MainWindow(QMainWindow):
     def _apply_tooltip_setting(self):
         """Honour the "Show tooltips" setting straight away.
 
-        Tooltips are suppressed app-wide by an event filter.  Installing and
-        removing it here means toggling the setting takes effect at once,
-        rather than only after a restart.
+        The filter covers the transport controls only - see _TooltipGate.
+        Installing and removing it here means toggling the setting takes
+        effect at once, rather than only after a restart.
         """
         app = QApplication.instance()
         if app is None:
@@ -749,7 +749,10 @@ class MainWindow(QMainWindow):
                 self._tooltip_gate = None
         else:
             if gate is None:
-                self._tooltip_gate = _TooltipGate()
+                panel = getattr(self, "transport_panel", None)
+                if panel is None:
+                    return
+                self._tooltip_gate = _TooltipGate(panel)
                 app.installEventFilter(self._tooltip_gate)
 
     def _apply_edit_mode_now(self):
@@ -2046,6 +2049,14 @@ class MainWindow(QMainWindow):
             self.scenes.markers = []
             self._refresh_scenes_from_selection()
 
+            # What the detector proposed, for this recording.  Saving these
+            # cuts back unchanged tells Chalkline only that it agreed with
+            # itself, so the learning pass can skip a settled channel rather
+            # than spend minutes decoding to learn nothing - see
+            # _project_was_corrected().
+            self._proposed_ranges = (self.current_filename,
+                                     list(keep_ranges))
+
             # Jump to the start of the first detected scene.
             self.goto_frame(keep_ranges[0][0])
 
@@ -2477,7 +2488,14 @@ class MainWindow(QMainWindow):
             info.get("sar_brackets", 0), info.get("anchor_brackets", 0),
             info.get("coincidence_brackets", 0),
         )
-        if info.get("mask_brackets"):
+        if info.get("mask_unfit") is not None:
+            log.info(
+                "  remembered %spx %s logo not used: it matches only %.1f%% "
+                "of this recording",
+                info.get("mask_pixels"), info.get("mask_kind"),
+                100 * info["mask_unfit"],
+            )
+        elif info.get("mask_brackets"):
             log.info(
                 "  remembered %spx %s logo supplied %s bracket(s)",
                 info.get("mask_pixels"), info.get("mask_kind"),
@@ -2544,6 +2562,20 @@ class MainWindow(QMainWindow):
 
         self._start_learn(job)
 
+    def _project_was_corrected(self, recording):
+        """Did the user change what the detector proposed for this recording?
+
+        True whenever there is nothing to compare against - cuts made by hand,
+        a project opened from disk, a detection run in an earlier session.
+        Those are all worth learning from.  Only cuts saved back exactly as
+        the detector proposed them count as agreement.
+        """
+        proposed = getattr(self, "_proposed_ranges", None)
+        if not proposed or proposed[0] != recording:
+            return True
+        ranges = [tuple(r) for r in self.selection.ranges]
+        return ranges != [tuple(r) for r in proposed[1]]
+
     def _start_learn(self, job):
         """Begin one learning pass.  Returns True if a worker was started."""
         recording, vprj_path = job
@@ -2553,7 +2585,10 @@ class MainWindow(QMainWindow):
             log.debug("Chalkline learning unavailable", exc_info=True)
             return False
 
-        worker = ChalklineLearnWorker(recording, vprj_path, self)
+        worker = ChalklineLearnWorker(
+            recording, vprj_path, self,
+            corrected=self._project_was_corrected(recording),
+        )
         self._learn_worker = worker
         self._learn_current = job
         worker.started_learning.connect(self._on_learn_started)
@@ -2623,6 +2658,18 @@ class MainWindow(QMainWindow):
         recording's length turns that from a suspicion into something the
         next log settles by itself.
         """
+        for trial in info.get("trials", []):
+            log.info(
+                "  %dpx logo: seen in %.0f%% of the programme, %d break(s) "
+                "it would have invented%s",
+                trial["count"], 100 * trial["prog"], trial["false"],
+                "" if trial["fitted"] else ", and it does not fit at all",
+            )
+        if info.get("trials"):
+            log.info("  %s is now using the %dpx logo of the %d it holds",
+                     info.get("channel", "this channel"),
+                     info.get("active_count", 0), info.get("masks_held", 0))
+
         secs = info.get("elapsed")
         dur = info.get("duration")
         if secs is not None:
@@ -2674,7 +2721,18 @@ class MainWindow(QMainWindow):
                         info["error"])
             self._learn_channel = None
             return
-        if info.get("learned"):
+        if info.get("active_changed"):
+            channel = info.get("channel", "this channel")
+            log.info("Chalkline changed which logo it uses for %s", channel)
+            self.statusBar().showMessage(
+                self.tr("Chalkline found a better logo for %s from your "
+                        "edit - detection on this channel should improve.")
+                % channel,
+                15000,
+            )
+            self._learn_channel = None
+            return
+        if info.get("learned") and info.get("learned_active", True):
             channel = info.get("channel", "this channel")
             kind = info.get("kind") or ""
             log.info(
@@ -2696,6 +2754,16 @@ class MainWindow(QMainWindow):
             self._learn_channel = None
             return
         self._learn_channel = None
+        if info.get("learned"):
+            log.info(
+                "Chalkline learned another %s logo for %s (%d pixels): it "
+                "will be used if it does better than the one in use",
+                info.get("kind") or "", info.get("channel", "this channel"),
+                info["learned"],
+            )
+            for line in info.get("report", []):
+                log.debug("  %s", line)
+            return
         log.info("Chalkline learned nothing from this project: %s",
                  info.get("skipped", "no reason given"))
         for line in info.get("report", []):
@@ -5650,6 +5718,23 @@ class MainWindow(QMainWindow):
 
     def commit_selection(self):
         """Save the pending IN/OUT as a kept (green) range."""
+        sel = self.selection
+        # Say why nothing happened, rather than appearing to ignore the click.
+        # The markers deliberately survive a commit, so after adding a scene
+        # the OUT is still sitting at that scene's end - mark IN for the next
+        # scene, forget the OUT, and the span runs backwards. commit_range()
+        # refuses it; without a message the button looks broken.
+        if (sel.pending_in is not None and sel.pending_out is not None
+                and sel.pending_in > sel.pending_out
+                and len(sel._marked_since_commit) < 2):
+            self.statusBar().showMessage(
+                self.tr("Mark OUT for this scene - the OUT marker is still on "
+                        "the previous one."), 6000)
+            return
+        if sel.pending_in is None or sel.pending_out is None:
+            self.statusBar().showMessage(
+                self.tr("Mark IN and OUT first, then add the scene."), 4000)
+            return
         if self.selection.commit_range():
             self.scene_list.refresh()
 
@@ -5686,16 +5771,58 @@ class MainWindow(QMainWindow):
                 self.tr("Mark IN and OUT first, then cut."), 4000)
             return
 
+        # The same leftover-marker trap Scene Mode was given a guard for.
+        #
+        # The markers survive a cut on purpose, so a boundary that is a frame
+        # out can be nudged and re-cut.  But that leaves the OUT sitting on
+        # the cut just made: mark IN for the next one, forget the OUT, press
+        # Cut, and the span runs BACKWARDS from the old OUT to the new IN.
+        # min/max below would quietly turn that into the gap between them and
+        # cut material the user never marked.
+        #
+        # Only when a single fresh marker is involved, so marking OUT then IN
+        # deliberately still works and so does nudging - see commit_range().
+        # This was fixed for Scene Mode in 2.7.4 and NOT here, which left the
+        # trap in the mode most people use for adverts.
+        if (sel.pending_in > sel.pending_out
+                and len(sel._marked_since_commit) < 2):
+            self.statusBar().showMessage(
+                self.tr("Mark OUT for this cut - the OUT marker is still on "
+                        "the previous one."), 6000)
+            return
+
         start = min(sel.pending_in, sel.pending_out)
         end = max(sel.pending_in, sel.pending_out)
 
         changed = False
 
         if self.frames:
-            for c_start, c_end in sel.cut_ranges(len(self.frames) - 1):
-                if c_start <= start <= c_end:
-                    changed = sel.adjust_cut(c_start, c_end, start, end)
-                    break
+            # Decide by OVERLAP, not by where the IN marker happens to land.
+            #
+            # This used to ask only whether the new IN fell inside an existing
+            # cut.  If it did, that cut was replaced and both ends moved; if it
+            # did not, the span was subtracted instead - and subtracting can
+            # only ever REMOVE material, so it could pull a cut's start earlier
+            # but never pull its end back.
+            #
+            # A user reported the result: adjusting both ends of a cut in one
+            # operation moved the IN and left the OUT alone, and pressing Cut a
+            # second time without touching anything then fixed it - because by
+            # then the IN was inside the cut and the other path ran.  It needed
+            # all three of: both markers moved before pressing, the new IN
+            # outside the cut, and the new OUT inside it. Miss any one and it
+            # behaved, which is why it went unnoticed for so long.
+            #
+            # Scene Mode has always replaced - see the EDIT-vs-ADD rule in
+            # commit_range() - so this also makes the two modes agree: what you
+            # marked is what you get.
+            overlapping = [
+                (c_start, c_end)
+                for c_start, c_end in sel.cut_ranges(len(self.frames) - 1)
+                if min(c_end, end) >= max(c_start, start)
+            ]
+            if overlapping:
+                changed = sel.replace_cuts(overlapping, start, end)
             else:
                 changed = sel.subtract_range(start, end)
         else:
@@ -6853,13 +6980,77 @@ except Exception:
     pass
 
 class _TooltipGate(QObject):
-    """When tooltips are switched off in Settings, this app-wide filter quietly
-    eats tooltip events so no hints appear anywhere."""
+    """Eats tooltip events for the transport controls, and only those.
+
+    The setting this serves says "Show tooltips on the transport controls",
+    and it used to be an app-wide filter that swallowed EVERY tooltip - so
+    turning off the hints on the play and step buttons also hid the ones that
+    carry information nothing else shows: what each remembered logo has
+    scored, a long path abbreviated in a menu, a queue row's error. The user
+    turned it off for the transport buttons, went looking for a logo's record
+    in the Remembered Logos dialog, and found nothing there to see.
+
+    `panel` is the transport panel; a tooltip is swallowed only when it is
+    bound for that panel or something inside it.
+    """
+
+    def __init__(self, panel):
+        super().__init__()
+        self._panel = panel
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.ToolTip:
-            return True    # swallow it
+        if event.type() != QEvent.ToolTip:
+            return False
+        panel = self._panel
+        if panel is None:
+            return False
+        try:
+            widget = obj if isinstance(obj, QWidget) else None
+            while widget is not None:
+                if widget is panel:
+                    return True    # swallow it
+                widget = widget.parentWidget()
+        except RuntimeError:
+            # The panel has been destroyed with the window; let it through.
+            return False
         return False
+
+
+# Only one editor at a time.
+#
+# Two copies share the batch queue, the settings file, the logo store and the
+# staging folder, and two Batch Managers running at once will both work through
+# the same queue with nothing marking a job as taken - measured, they exported
+# the same recordings to the same paths five seconds apart.  See HANDOVER.md
+# item 1h.
+#
+# Done BEFORE the window is built, so a second launch costs almost nothing and
+# never flashes a window it is about to close.  If the lock is held, the file
+# we were asked to open is handed to the copy already running and this process
+# exits - the second process exists because the user double-clicked a project,
+# so simply refusing to start would leave that project unopened.
+_instance = None
+try:
+    from watch.single_instance import EditorInstance
+
+    _instance = EditorInstance()
+    if not _instance.acquire():
+        _args = [a for a in sys.argv[1:] if not a.startswith("-")]
+        _wanted = _args[0] if _args else ""
+        if _instance.hand_off(_wanted):
+            log.info("Snipwright is already running - handed over %s",
+                     _wanted or "(no file)")
+            sys.exit(0)
+        # The lock was held but nothing answered: a half-dead instance.  Better
+        # to start than to leave the user with an editor that will not open.
+        log.warning("Snipwright appears to be running but did not respond; "
+                    "starting anyway.")
+        _instance = None
+except SystemExit:
+    raise
+except Exception:
+    log.debug("Single-instance check unavailable", exc_info=True)
+    _instance = None
 
 
 window = MainWindow()
@@ -6878,11 +7069,73 @@ window.show()
 # the editor; a .vprj/.edl project loads its video and cuts.  Anything we don't
 # recognise is ignored - the app just opens empty.  Done after show() so the
 # window exists to receive it and any error dialog has a parent.
-def _open_launch_argument():
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    if not args:
+def _bring_to_front():
+    """Come forward when another launch hands a file over.
+
+    A window manager normally REFUSES to let a background application take
+    focus - that request needs a recent user-interaction timestamp, and the
+    process that had one (the second launch, started from the file manager)
+    has already exited by the time we get here.  The refusal is correct
+    behaviour for an application being rude, and this is the one case where it
+    is not: the user double-clicked a project, so they plainly want it.
+    Without this the project loads invisibly and double-clicking looks like it
+    did nothing.  A save prompt appears anyway, because a modal dialog is
+    allowed through - which is why the effect is only noticed when nothing
+    needed saving.
+
+    So ask properly and accept the answer.  Un-minimise first, or raising a
+    minimised window achieves nothing.  `alert()` asks the desktop to draw
+    attention to the window - a flashing taskbar button on Windows, an urgency
+    hint on KDE and GNOME.
+
+    ON CINNAMON NONE OF IT WORKS: the window stays where it is and the panel
+    entry does not flash either.  That is accepted rather than fought.  The
+    project still loads; only the focus does not follow.  Forcing it means
+    toggling always-on-top or similar, which flickers, is exactly what
+    focus-stealing prevention exists to stop, and is unreliable anyway.
+
+    These calls stay because they are harmless where refused and DO work on
+    other desktops.  The legitimate fix, if this is ever wanted properly, is to
+    pass the launching process's activation token (`DESKTOP_STARTUP_ID` /
+    `XDG_ACTIVATION_TOKEN`) across with the file path, so the raise carries the
+    user's own interaction instead of being asked for unprompted.  See
+    HANDOVER.md item 1h.
+    """
+    try:
+        if window.isMinimized():
+            window.showNormal()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        # Refused on some desktops (Cinnamon ignores it); honoured on others.
+        app.alert(window, 0)
+    except Exception:
+        log.debug("Could not bring the window forward", exc_info=True)
+
+
+def _open_launch_argument(path=None):
+    """Open a file given on the command line, or handed over by a second launch.
+
+    `path` is None for the normal startup case, where it comes from argv.  A
+    second copy of Snipwright passes the file it was asked to open and then
+    exits; this is what actually opens it.
+
+    The same function serves both deliberately.  It already routes `.vprj`,
+    `.edl` and video extensions correctly, and `load_project_file()` already
+    raises the window and asks before discarding unsaved edits - with a Cancel
+    that leaves the current project alone.  Re-implementing any of that on the
+    receiving side would be two versions of the same decision, free to drift.
+    """
+    if path is None:
+        args = [a for a in sys.argv[1:] if not a.startswith("-")]
+        if not args:
+            return
+        path = args[0]
+    if not path:
+        # A second launch with no file - the user started Snipwright again.
+        # Nothing to open, so just come to the front.
+        _bring_to_front()
         return
-    path = args[0]
     if not os.path.isfile(path):
         return
     ext = os.path.splitext(path)[1].lower()
@@ -6905,6 +7158,21 @@ def _open_launch_argument():
         log.exception("Failed to open launch argument: %s", path)
 
 _open_launch_argument()
+
+# Listen for later launches now the window exists to receive them.  Anything
+# handed over arrives on the Qt event loop, so it lands on the GUI thread and
+# can open dialogs safely.
+if _instance is not None:
+    def _handed_over(path):
+        try:
+            _bring_to_front()
+            log.info("Another launch handed over: %s", path or "(no file)")
+            _open_launch_argument(path)
+        except Exception:
+            log.exception("Failed to open a handed-over file: %s", path)
+
+    _instance.listen(_handed_over)
+    app.aboutToQuit.connect(_instance.release)
 
 sys.exit(
     app.exec()

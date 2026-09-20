@@ -289,6 +289,14 @@ out where the breaks are. Its guiding principle is that a wrong answer is worse 
 answer: when it cannot tell, it reports nothing at all rather than guessing and removing
 part of the programme. A recording it says nothing about is one to mark by hand, not one
 where the adverts have been missed silently.</p>
+<p>The recorder's padding &mdash; the few minutes before the programme starts and the
+longer stretch after it ends &mdash; is trimmed along with the adverts. The start is
+reliable. The end depends on the channel: where the picture's shape or aspect changes as
+the programme finishes and stays changed, Snipwright trims all the way to the end of the
+recording; where it does not, the trim stops at the advert break after the programme and
+some continuity is left on the end. That is worth a look before you export, and it is a
+quick fix by hand &mdash; mark from the end of the programme to the end of the recording
+and cut.</p>
 <div class="note">Detection takes a little longer than Comskip &mdash; a few per cent over
 a run of several recordings &mdash; because Chalkline decodes the recording rather than
 reading the broadcast's own signalling. On a single full-length programme the difference is
@@ -310,11 +318,17 @@ trustworthy ground truth to learn from:</p>
   <li>The edit has at least one advert break in it, of a plausible length, and keeps more
   than half the recording.</li>
   <li>Snipwright can work out which channel the recording came from.</li>
-  <li>Nothing is remembered for that channel yet. A logo that is already working is never
-  silently replaced &mdash; one poor edit could otherwise undo a good one with nothing to
-  show that it had happened. To force a fresh start, forget the channel in the Remembered
-  logos dialog first.</li>
+  <li>The project is one you have changed. Saving a detection back exactly as it was
+  proposed tells Snipwright only that it agreed with itself, so a channel whose logo is
+  already settled is left alone rather than spending several minutes learning nothing.</li>
 </ul>
+<p>A channel can end up with more than one logo &mdash; a station changes its logo, or one
+recording gives a clearer view of it than another. Snipwright keeps up to four and decides
+between them on your own work: each time you save a project you have corrected, the logos
+it already holds are scored against your cuts, and the one that does best is the one it
+uses from then on. A logo learned from the recording you just saved has to prove itself on
+a later one first, so a single awkward recording cannot displace a logo that has been
+working well.</p>
 <div class="note"><strong>Learning takes several minutes, and it happens after the save.</strong>
 It decodes the whole recording, so the result arrives well after the save that triggered
 it. The status line tells you when learning has actually started, and again when it
@@ -326,6 +340,13 @@ see what Chalkline has learned. Each row shows the channel, a drawing of the log
 has stored, how many pixels that mask covers and whether the logo is on screen constantly
 or only intermittently, and a contrast figure &mdash; higher is a cleaner signal to work
 from.</p>
+<p>A channel holding more than one logo says &ldquo;best of&rdquo; and the number it holds
+in the Mask column. Resting the pointer anywhere on that channel's row shows each logo it
+holds, how many of your projects each has been scored against and how many breaks each
+would have invented, and marks the one in use. Renaming a
+logo onto a name that already has one joins the two and keeps both logos, leaving the
+channel using the one it already had until your next corrected project settles which is
+better.</p>
 <p align="center" class="figrow"><img class="gimg m660" src="img/chalkline.png" width="660" height="452" alt="The Remembered logos dialog, listing learned channel logos"></p>
 <p align="center" class="cap">Logos Chalkline has learned. The top three rows carry both a channel name and a service ID, so recordings from either kind of recorder are matched to the same logo; the fourth has a name only.</p>
 <div class="note">The drawing is not there to let you recognise the brand; it is far too
@@ -366,7 +387,7 @@ VideoReDo <code>.vprj</code> files (both the V5 VRD and V3 Comskip dialects) and
 <strong>Export Project</strong> writes them back out. This lets you move edits between
 Snipwright and other tools, or keep a record of your cuts without re-exporting the video.</p>
 <div class="note">When a project is moved between Snipwright and VideoReDo, individual cut
-marks may shift by a frame or two &mdash; the two editors index frames slightly differently
+marks may shift by a handful of frames &mdash; the two editors index frames slightly differently
 internally. The cut each editor makes is still frame-accurate to the marks it is showing
 you. <strong>If a mark looks wrong in whichever editor you are using, correct it there
 before saving</strong> &mdash; do not assume it will cut where you originally intended.
@@ -785,8 +806,10 @@ rather than the current setting.</p>
   When the evidence is not good enough it reports nothing rather than guessing and cutting
   into the programme. Mark that recording by hand; if you save it as a project, Chalkline
   learns the channel's logo from your edit and should do better on the next one from that
-  channel. A channel that never works is worth forgetting in the Remembered logos dialog so
-  it is learned again from a fresh edit.</li>
+  channel. A channel that keeps disappointing will sort itself out as you correct more of
+  its recordings &mdash; each corrected project is scored against the logos it holds and
+  the best one wins &mdash; but forgetting it in the Remembered logos dialog makes it start
+  again from a fresh edit.</li>
   <li><strong>Comskip results look off:</strong> Comskip is configured through its
   <code>.ini</code> file and benefits from being tuned to your source &mdash; in particular
   its frame rate. A well-tuned ini makes a big difference to detection quality. If different
@@ -795,6 +818,18 @@ rather than the current setting.</p>
   change is expected; it is capped at the source bitrate so it should never grow. Auto-detect
   samples a run of frames, so pick a representative (bright) frame in the preview if you adjust
   by hand.</li>
+  <li><strong>Snipwright is slow to start on Windows, but only the first time:</strong>
+  that is Windows checking the video libraries as they are read. Expect 15&ndash;20 seconds
+  on the first launch after a restart, and one or two seconds every launch after that until
+  you restart again. Linux and macOS are not affected.
+  <p>If it bothers you, excluding Snipwright's folder from Windows Security roughly halves
+  the first launch: <strong>Windows Security &rarr; Virus &amp; threat protection &rarr;
+  Manage settings &rarr; Exclusions &rarr; Add or remove exclusions &rarr; Add an exclusion
+  &rarr; Folder</strong>, then pick the folder Snipwright is installed in. It needs
+  administrator rights. Excluding only the <code>.venv</code> folder inside it helps less.</p>
+  <p>Weigh that against what it means: nothing in an excluded folder is checked as it is
+  opened, including any file that later finds its way in there. It is your call rather than
+  a recommendation, and it is worth keeping the folder to Snipwright alone if you do it.</p></li>
   <li><strong>Something went wrong:</strong> the application log (under
   <strong>Settings &rarr; Logs</strong>) records the detail behind each export and is the first
   place to look.</li>

@@ -6,6 +6,246 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.8.0] - 2026-09-20
+
+### Changed
+
+- **Snipwright can change its mind about a channel's logo.** It used to learn
+  a channel's logo once and keep it for good: a logo learned from an awkward
+  recording was stuck, and there was no way to tell a good one from a bad one.
+  It now keeps up to four logos for a channel and, whenever you save a project
+  you have corrected, scores the ones it already has against your own cuts -
+  the logo should be out of sight through the adverts and on screen through
+  the programme. Two logos are only ever compared on recordings they have
+  both been scored against, so a logo is never punished for having been tried
+  on a harder recording than its rival. Whichever wins there is the one used
+  from then on, and a logo learned from the recording you just saved has to
+  prove itself on a later one before it can take over. This only runs if
+  "Learn channel logos from my edits" is ticked in Settings > Advert
+  detection, and a channel whose logo is
+  already settled is left alone when you save cuts exactly as proposed. The
+  log records what each logo scored.
+
+- **Trimming the end of a recording no longer leaves the continuity on it.**
+  A recorded programme ends, an advert break follows, and then comes
+  continuity or the start of the next programme - with the channel's logo
+  back on screen. Snipwright cut the advert break and stopped there, leaving
+  seven to ten minutes on the end of what you trimmed. Where the picture's
+  shape or aspect changes as the programme ends and stays changed to the end
+  of the recording, that trim now carries on to the end. The cut still starts
+  where it always did, so nothing is taken off the programme, and channels
+  whose picture does not change are unaffected.
+
+- **"Show tooltips on the transport controls" turned off every tooltip in
+  Snipwright.** It reads as though it covers the play and step buttons, and
+  that is what it was for, but it silently suppressed every hint in the
+  program - including the ones that carry information nothing else shows,
+  such as what each remembered logo has scored, or the full path behind an
+  abbreviated menu entry. It now does what it says and leaves the rest alone.
+
+- **What a channel's logos have scored was hidden where nobody would look.**
+  The tip listing each remembered logo, the projects it has been measured
+  against and the breaks it would have invented only appeared over the Mask
+  column, not over the logo picture or the channel name - so resting the
+  pointer where you would expect showed nothing at all. It now appears
+  anywhere on the channel's row, and the user guide says so.
+
+- **Joining two remembered logos no longer throws one away.** Renaming a
+  remembered logo onto a name that already has one used to keep whichever
+  had the higher contrast and discard the other. Contrast is measured on the
+  recording each logo came from, so the two figures were never comparable,
+  and the discarded logo was sometimes the better one. The joined channel now
+  keeps both and carries on with the one it was already using, until your
+  corrected projects show the other to be better. The list also shows how many
+  logos a channel holds, and hovering over it says what each has scored.
+
+- **Advert detection ignores a learned logo that does not match the
+  recording.** A channel's logo can change, or a recording can be framed
+  differently from the one the logo was learned from, and a learned logo that
+  no longer matches sees nothing at all. Snipwright used it anyway, which cost
+  nothing obvious but quietly switched off the checks that stop it inventing
+  breaks. It now checks first, and a logo that matches too little of the
+  recording is left out of that recording - detection carries on exactly as
+  it would for a channel it has not learned. The log says when this happens.
+
+- **The user guide now says what to expect at the end of a recording, and how
+  channel logos are chosen.** It said nothing about the trim at the end of a
+  recording, which is reliable on channels whose picture changes shape as the
+  programme finishes and stops at the advert break on those that do not - so
+  it is worth a look before exporting. Its account of logo learning was also
+  out of date: a channel keeps several logos now and picks between them on
+  the projects you correct, rather than keeping the first one it learned for
+  good.
+
+- **The user guide understated how far cut marks can drift between Snipwright
+  and VideoReDo.** It said "a frame or two"; a dozen or so in both directions
+  is closer to what actually happens, so it now says "a handful of frames".
+  The advice either side of it was already right - check a mark in whichever
+  editor you are using before saving, because it will cut where it now sits.
+
+- **Snipwright now runs as a single instance.** Opening a project from your
+  file manager brings the Snipwright you already have to the front and loads it
+  there, instead of starting a second copy. If the project you are working on
+  has unsaved changes you get the usual save prompt first, with Cancel to leave
+  things as they are. Two copies shared the batch queue, the settings and the
+  logo store, and two batches running at once would work through the same queue
+  with neither knowing about the other - so this closes a whole class of
+  problem rather than being a tidiness measure.
+
+### Fixed
+
+- **Subtitles from a disc rip were lost on export, without a word.** A cut
+  bound for .mkv or .mp4 is written to a transport stream first, and a
+  transport stream can only carry broadcast subtitles - so the PGS or SubRip
+  subtitles in a rip disappeared on the way. An .mkv export now takes those
+  recordings through a Matroska working file instead and keeps them; a
+  broadcast recording is unaffected and follows exactly the path it did
+  before. Where the format genuinely cannot hold them - .ts and .mp4 - the
+  export now says so in its summary rather than dropping them in silence.
+
+- **Subtitles could be missing from an exported recording.** Where the export
+  had to rebuild the audio - which happens on a profile that re-encodes audio
+  to AAC, and on a few repair routes - the rebuilt file was assembled from
+  the video and audio alone, and any subtitles the recording carried were
+  dropped without a word. They are now carried through every route. (An .mp4
+  export still cannot keep broadcast subtitles: the format has no place to
+  put them.)
+
+- **A recording whose timestamps jump exported as hours long.** Some
+  broadcasts carry a clock that leaps forward partway through the programme,
+  by hours, with nothing actually missing - a 45-minute Channel 4 HD
+  recording can claim to run for over seven. Snipwright showed and cut these
+  correctly, but an export spanning the leap came out reported as hours long:
+  in MKV every subtitle after the leap was placed hours late, and in TS the
+  audio was needlessly rebuilt. The leap is now closed as the cut is made, so
+  video, audio and subtitles all run on without a gap, the file reports its
+  real length, chapter marks land where they should, and the export log shows
+  scene times as they play rather than hours out. It also says where the leap
+  was. Recordings whose timestamps run normally export exactly as before.
+
+- **The export summary showed a wall of text where a footnote belonged.** When
+  an export had something to explain - scenes re-encoded to join them, say -
+  the box printed the whole explanation, and printed it as Python's own
+  rendering of the underlying data, brackets and quotes included. It now shows
+  the short version and says to check the log, which carries the full
+  explanation as it always did.
+
+- **Joining scenes that did not match dropped all but the first audio track.**
+  When scenes share a format they are joined without re-encoding, and that
+  path was fixed earlier; scenes that do not match have to be re-encoded, and
+  that path still carried a single audio track however many went in. An audio
+  description or second language was lost. It now carries every track the
+  scenes have in common, each kept at its own channel layout and bitrate, so a
+  5.1 main track and a stereo audio description stay as they were rather than
+  both being forced to the same shape. If the scenes have different numbers of
+  audio tracks, the ones they share are kept and the export notes say so.
+
+- **The TV Renamer missed the second half of a double episode.** A recording
+  named `S01E01 S01E02` - the two episodes separated by a space, each with its
+  own season number - was read as episode one alone, so the file was renamed
+  and filed as a single episode. `S01E01E02` and `1x01-02` were already
+  understood; the spaced form, and `S01E01 & S01E02` and `S01E01, S01E02`,
+  now are too. A title that merely looks like a second episode is still
+  ignored, so `S03E21 - E2 - The Title` remains one episode.
+
+- **The TV Renamer named a double episode after its first half.** Selecting
+  both parts gave the right numbering but kept the part marker from the first
+  title, so a file covering two episodes came out as `Stargate SG-1 -
+  S01E01-02 - Children of the Gods (1)` - the numbering saying two episodes
+  and the title saying part one. The marker is now dropped when a file holds
+  more than one episode, so that becomes `Stargate SG-1 - S01E01-02 -
+  Children of the Gods`. Two episodes that are not
+  parts of the same story keep both titles, joined, rather than one being
+  quietly lost. A title that simply ends in something marker-shaped - Apollo
+  13, Catch-22, Episode 50 - is left alone.
+
+- **Snipwright could refuse to learn a channel's logo from a perfectly good
+  recording.** It expected your recorder to be padding the start or end of
+  each recording - a few minutes either side of the scheduled time - and
+  treated a recording without that padding as one that had already been cut,
+  refusing to learn from it and saying so in the log. Most recorders do not
+  pad by default, so anyone who had not turned it on could never teach
+  Snipwright a logo at all, and the reason given pointed at the wrong thing.
+  The padding was never used for the learning itself - a padded and an
+  unpadded edit of the same recording teach it from exactly the same
+  boundaries - so the requirement has gone. The checks that matter are
+  unchanged: every cut has to be a plausible length for an advert break, and
+  they cannot remove more than half the recording.
+
+- **Adjusting both ends of a cut at once only moved one of them.** Moving the
+  start of an existing cut earlier and its end earlier, then pressing Cut
+  Selection once, moved the start and left the end where it was. Pressing Cut
+  Selection again without touching anything then moved the end, which made it
+  look as though the first press had been ignored. Snipwright was deciding
+  what to do from where the IN marker landed rather than from what the marked
+  span covered, and the path it chose could only ever remove more material,
+  never give any back. A marked span that overlaps an existing cut now simply
+  becomes that cut, both ends together - the same rule Scene Mode has always
+  used. Marking across two cuts joins them into the one span you marked.
+
+- **Advert detection invents fewer breaks.** When Snipwright has learned a
+  channel's logo, it now trusts that over its general search for something
+  parked in a corner. Where the two disagree - the corner search says the logo
+  has gone, the learned one says it is still there - the learned one wins, and
+  no break is proposed. Measured across thirty recordings this removed two
+  false breaks and cost nothing: no real advert break was lost and no other
+  recording changed. It also fixed a break that started 46 seconds early on
+  one recording, cutting into the programme.
+
+  The learned logo is now held to the same standard itself. A logo that is
+  really there, but hard to make out against a busy background, can be lost
+  for a moment every few seconds - and a minute of that used to be read as
+  the logo being gone, and proposed as a break. Where the learned logo's own
+  reading says it was there for most of that time, no break is proposed. Cuts
+  close to the start or end of a recording are left alone by both checks, so
+  the padding either side of the programme - where the channel's logo is
+  often still on screen - is still trimmed. Measured across the same thirty
+  recordings, this removed three more false breaks, again without losing a
+  real one or changing anything else.
+
+- **Cutting without marking OUT could remove part of the programme.** This is
+  the Cut Mode version of the scene fault fixed just before it, and it was the
+  more damaging of the two. The markers stay where they are after a cut so you
+  can nudge a boundary and cut again, which leaves the OUT sitting on the cut
+  you just made. Mark IN for the next advert break, forget the OUT, press Cut,
+  and the range ran backwards - Snipwright turned it into the gap between the
+  two marks and removed everything in between, which is programme rather than
+  adverts. A range that runs backwards from a leftover marker is now refused,
+  with a note in the status bar. Marking OUT before IN deliberately still
+  works, and so does nudging a boundary.
+
+- **Adding a scene without marking OUT could destroy the scenes either side of
+  it.** The IN and OUT markers stay where they are after you add a scene, so
+  you can nudge a boundary that is a frame out and add again. But that leaves
+  the OUT sitting on the scene you just finished: mark IN for the next scene,
+  forget the OUT, press Add, and the range ran backwards from the old OUT to
+  the new IN. Snipwright quietly turned that into a scene covering the gap
+  between them, which overlapped the neighbouring scenes and replaced both -
+  two scenes lost from one mislaid click. A range that runs backwards from a
+  leftover marker is now refused, with a note in the status bar saying the OUT
+  is still on the previous scene. Marking OUT before IN deliberately still
+  works, and so does nudging a boundary.
+
+- **Running two copies of Snipwright could lose queued batch jobs, and could
+  delete a project one of them still needed.** The batch queue is read once
+  when Snipwright starts and written back whole whenever it changes, so two
+  copies each held their own idea of it and whichever saved last quietly erased
+  the other's additions. Nothing was ever corrupted - the jobs simply went,
+  with no error. Worse, removing a job deleted the working copy of its project,
+  and that decision was made from one copy's view of the queue: a job removed
+  in one window could have its project deleted while the other window still
+  had that job and later tried to run it, failing with "The project file has no
+  source recording recorded".
+
+  The queue is now re-read and merged at the moment it is saved, so jobs added
+  in one window survive a save in the other and a job you delete stays deleted.
+  Working copies are kept if ANY window's queue still refers to them. And the
+  queue is refreshed from disk when the Batch Manager is opened and again when
+  a batch is started, so a window is not working from a list it read hours ago.
+  Settings have the same shape and are not fixed here; a later release will
+  make opening a project use the window you already have rather than starting
+  another.
+
 ## [2.7.0] - 2026-09-10
 
 ### Changed

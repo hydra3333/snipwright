@@ -158,8 +158,12 @@ class PassthruAudioCutter:
             else:
                 packet = copy_packet(p)
             packet.stream = self.out_stream
-            packet.pts = int(p.pts + (self.segment_start_in_output - cut_segment.start_time) / in_tb)
-            packet.dts = int(p.dts + (self.segment_start_in_output - cut_segment.start_time) / in_tb)
+            # Subtract any leap in the source clock this packet sits beyond
+            # (zero for an ordinary segment) - see CutSegment.clock_jumps.
+            shift = (self.segment_start_in_output - cut_segment.start_time
+                     - cut_segment.jump_before(p.pts * in_tb))
+            packet.pts = int(p.pts + shift / in_tb)
+            packet.dts = int(p.dts + shift / in_tb)
             if packet.pts <= self.prev_pts:
                 print("Correcting for too low pts in audio passthru")
                 packet.pts = self.prev_pts + 1
@@ -170,7 +174,8 @@ class PassthruAudioCutter:
             self.prev_dts = packet.dts
             packets.append(packet)
 
-        self.segment_start_in_output += cut_segment.end_time - cut_segment.start_time
+        # The segment's real length: a straddled clock leap is not output time.
+        self.segment_start_in_output += cut_segment.output_length
         return packets
 
     def finish(self) -> list[Packet]:
@@ -236,7 +241,11 @@ class SubtitleCutter:
 
         for packet in out_packets:
             packet.stream = self.out_stream
-            packet.pts = int(packet.pts - segment_start_pts + self.segment_start_in_output / in_tb)
+            # Subtitles were the one track nothing downstream repaired, so a
+            # leap in the source clock left every subtitle after it hours
+            # late and the whole output reporting that length.
+            jump = cut_segment.jump_before(packet.pts * in_tb) / in_tb
+            packet.pts = int(packet.pts - segment_start_pts - jump + self.segment_start_in_output / in_tb)
 
             if packet.pts < self.prev_pts:
                 print("Correcting for too low pts in subtitle passthru. This should not happen.")
@@ -245,7 +254,7 @@ class SubtitleCutter:
             self.prev_pts = packet.pts
             self.prev_dts = packet.dts
 
-        self.segment_start_in_output += cut_segment.end_time - cut_segment.start_time
+        self.segment_start_in_output += cut_segment.output_length
         return out_packets
 
     def finish(self) -> list[Packet]:

@@ -273,12 +273,42 @@ class ExportCompleteDialog(QDialog):
 
         # Footnotes continue the figures' alternating-row pattern so they sit
         # flush with the rows above (VRD-style asterisks); detail is in the log.
+        #
+        # A note is a (headline, explanation) pair.  This used to hand the
+        # whole pair to _esc(), so the dialog showed Python's own rendering of
+        # a tuple - brackets, quotes, comma and all - followed by a paragraph
+        # of explanation that made the box taller than the figures it was
+        # annotating.  Only the headline belongs here; the explanation is
+        # already written to the log next to it, which is where the other
+        # long-form detail lives.
         for j, note in enumerate(notes):
+            if isinstance(note, (tuple, list)):
+                text = note[0] if note else ""
+            else:
+                text = note
+            if not text:
+                continue
             bg = "#2f3136" if (len(rows) + j) % 2 == 0 else "#26282c"
             row_html.append(
                 f'<tr style="background:{bg};">'
                 f'<td colspan="2" style="padding:8px 18px; color:#9aa0a6;">'
-                f'* {_esc(note)}</td></tr>'
+                f'* {_esc(text)}</td></tr>'
+            )
+        if notes:
+            # The tr() call is pulled OUT of the f-string deliberately.
+            # pyside6-lupdate does not look inside an f-string's expressions,
+            # so a tr() written there is invisible to it: the string never
+            # reaches the .ts files and can never be translated, with nothing
+            # to show anything is wrong.  It was written that way first and
+            # caught only because the new-string count did not move.
+            see_log = self.tr("See the log for the full explanation.")
+            bg = "#2f3136" if (len(rows) + len(notes)) % 2 == 0 else "#26282c"
+            row_html.append(
+                f'<tr style="background:{bg};">'
+                f'<td colspan="2" style="padding:8px 18px; color:#9aa0a6; '
+                f'font-size:11px;">'
+                f'{_esc(see_log)}'
+                f'</td></tr>'
             )
 
         # Top status line: blank on a clean export; genuine problems shown in a

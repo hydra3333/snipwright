@@ -88,6 +88,16 @@ class BatchManagerDialog(QDialog):
 
         self._build_ui()
         self._connect_controller()
+        # Pick up anything another copy of Snipwright has queued or removed
+        # since this window's controller last read the file.  The window is
+        # rebuilt every time it is opened, so this is the natural moment: a
+        # user who opens the Batch Manager is about to look at the queue, and
+        # showing them a list from startup is how two windows come to disagree.
+        # Does nothing while a batch is running - see refresh_from_disk().
+        try:
+            self.controller.refresh_from_disk()
+        except Exception:
+            pass
         self._refresh_table()
         self._sync_running_state()
 

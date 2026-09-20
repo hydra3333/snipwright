@@ -639,6 +639,17 @@ class VideoCutter:
             result.append(packet)
         return result
 
+    def _jump_ticks(self, s: CutSegment, ts, time_base=None) -> Fraction:
+        """Clock jump to remove from a source timestamp, in its own ticks.
+
+        Zero unless the segment straddles a leap in the source clock (see
+        CutSegment.clock_jumps), so every ordinary segment is untouched.
+        """
+        if not s.clock_jumps or ts is None:
+            return Fraction(0)
+        tb = time_base if time_base is not None else self.in_time_base
+        return s.jump_before(ts * tb) / tb
+
     def segment(self, cut_segment: CutSegment) -> list[Packet]:
         if cut_segment.require_recode:
             packets = self.recode_segment(cut_segment)
@@ -656,7 +667,10 @@ class VideoCutter:
             self.last_remuxed_segment_gop_index = cut_segment.gop_index
             self.is_first_remuxed_segment = False
 
-        self.segment_start_in_output += cut_segment.end_time - cut_segment.start_time
+        # output_length, not end_time - start_time: a segment straddling a
+        # leap in the source clock would otherwise push everything after it
+        # hours down the output.
+        self.segment_start_in_output += cut_segment.output_length
 
         for packet in packets:
             self._fix_packet_timestamps(packet)
@@ -700,7 +714,8 @@ class VideoCutter:
 
             out_tb = self.out_time_base if self.codec_name != 'mpeg2video' else self.enc_codec.time_base
 
-            frame.pts = int(frame.pts - s.start_time / in_tb)
+            jump = self._jump_ticks(s, frame.pts, in_tb)
+            frame.pts = int(frame.pts - s.start_time / in_tb - jump)
 
             frame.pts = int(frame.pts * in_tb / out_tb)
             frame.time_base = out_tb
@@ -740,9 +755,12 @@ class VideoCutter:
                 pts = packet.dts
             else:
                 pts = segment_start_pts
-            packet.pts = int((pts - segment_start_pts) * self.in_time_base / self.out_time_base + segment_start_offset)
+            # A packet is stamped wholly on one side of a clock leap, so its
+            # decode time takes the same shift as its presentation time.
+            jump = self._jump_ticks(s, pts)
+            packet.pts = int((pts - segment_start_pts - jump) * self.in_time_base / self.out_time_base + segment_start_offset)
             if packet.dts is not None:
-                packet.dts = int((packet.dts - segment_start_pts) * self.in_time_base / self.out_time_base + segment_start_offset)
+                packet.dts = int((packet.dts - segment_start_pts - jump) * self.in_time_base / self.out_time_base + segment_start_offset)
 
             result_packets.extend(self.remux_bitstream_filter.filter(packet))
 
@@ -845,7 +863,8 @@ class VideoCutter:
         for frame in leading_frames:
             assert frame.pts is not None
             # Same formula as remux_segment
-            frame.pts = int((frame.pts - segment_start_pts) * self.in_time_base / self.out_time_base + segment_start_offset)
+            jump = self._jump_ticks(s, frame.pts)
+            frame.pts = int((frame.pts - segment_start_pts - jump) * self.in_time_base / self.out_time_base + segment_start_offset)
             frame.time_base = self.out_time_base
 
             if frame.pts <= self.enc_last_pts:
@@ -889,9 +908,10 @@ class VideoCutter:
             else:
                 pts = segment_start_pts
 
-            packet.pts = int((pts - segment_start_pts) * self.in_time_base / self.out_time_base + segment_start_offset)
+            jump = self._jump_ticks(s, pts)
+            packet.pts = int((pts - segment_start_pts - jump) * self.in_time_base / self.out_time_base + segment_start_offset)
             if packet.dts is not None:
-                packet.dts = int((packet.dts - segment_start_pts) * self.in_time_base / self.out_time_base + segment_start_offset)
+                packet.dts = int((packet.dts - segment_start_pts - jump) * self.in_time_base / self.out_time_base + segment_start_offset)
             copied_packets.extend(self.remux_bitstream_filter.filter(packet))
 
         copied_packets.extend(self.remux_bitstream_filter.filter(None))

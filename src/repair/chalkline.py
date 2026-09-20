@@ -264,8 +264,98 @@ EDGE_DISTANCE_COST = 0.04
 # the next edit the user makes on that channel, so carrying stale entries
 # across a rename buys nothing.
 LOGO_STORE = os.path.expanduser("~/.config/snipwright/chalkline-logos.json")
+
+# How much of a recording a corner must be on for its brackets to be worth
+# anything.  Below the floor it is not bracketing breaks - it is on only
+# during them, or it is picture detail - and above the ceiling it never goes
+# off at all.  Unchanged since 2.6.x; named here so a measurement can widen
+# the gate without touching detection (see dev/scripts/corner-evidence.py).
+CORNER_ON_MIN = 0.30
+CORNER_ON_MAX = 0.97
+
 # Mask contrast above which the logo counts as present in a frame.
 MASK_ON = 0.30
+
+# How close to the recording's end a shape or SAR bracket must reach before
+# it is taken as saying "the programme is over from here".  Twenty seconds
+# covers the last frames the measurement does not reach.
+TAIL_SWEEP_END = 20.0
+
+# How far a break's start may sit from such a bracket's start and still be
+# the same junction.  The two are measuring the same moment by different
+# means - the logo going off, and the picture's shape changing - and over
+# run 33 they agree to within 11s wherever both exist.
+TAIL_SWEEP_NEAR = 30.0
+
+
+def sweep_tail(breaks, shape_br, sar_br, duration):
+    """Carry the last break through to the end of the recording.
+
+    Item 1e.  A tail runs: programme, an advert break with the logo off, then
+    continuity or the next programme with the logo back ON.  The detector
+    cuts the advert break and stops there, because from then on the logo says
+    "programme" - which leaves seven to ten minutes of continuity on the end
+    of a trimmed recording, the user-visible half of item 1e.
+
+    The logo finds the junction accurately (within a few seconds on 11 of the
+    16 corpus recordings measured), so its START is kept exactly as it is.
+    What the logo cannot say is that everything AFTER the break is continuity
+    too.  A shape or SAR bracket that begins at that same junction and runs
+    to the end of the recording does say it: the picture's shape changed when
+    the programme ended and never changed back.
+
+    So where such a bracket exists, the last break is extended to the end of
+    the recording.  Where it does not, nothing happens - 5usa, legend,
+    more4-2, tptv-2, tptv3 and the U&Dave recordings keep exactly the tails
+    they have.
+
+    Deliberately NOT taken from the bracket's own start: on more4 the shape
+    changes 33s BEFORE the programme ends, and trimming from there would cut
+    programme - the one direction that matters.
+
+    The sweep starts at the FIRST break of the tail, not the last.  A tail is
+    often cut in pieces - itv1-4's is 9237-9304 and 9334-9557 - and the last
+    piece begins 102s after the junction, so matching on it would miss the
+    very fragmentation this exists to close.  The pieces are absorbed into
+    the one trim that runs to the end.
+    """
+    if not breaks or not duration:
+        return breaks, None
+    breaks = sorted(breaks)
+    if breaks[-1][1] >= duration - TAIL_SWEEP_END:
+        return breaks, None
+    for lo, hi in list(shape_br or []) + list(sar_br or []):
+        if hi < duration - TAIL_SWEEP_END:
+            continue
+        at = next((i for i, (a, _b) in enumerate(breaks)
+                   if abs(a - lo) <= TAIL_SWEEP_NEAR), None)
+        if at is None:
+            continue
+        gained = duration - breaks[-1][1]
+        swept = breaks[:at] + [(breaks[at][0], duration)]
+        return swept, (lo, hi, gained)
+    return breaks, None
+
+
+# Least share of a recording a remembered mask must read the logo in before
+# it is used on that recording at all.
+#
+# A mask can simply fail to fit a recording - the channel changed its logo,
+# the picture is framed differently, or two different pictures were joined
+# under one name in the Remembered Logos dialog.  It then reads "absent"
+# almost throughout, contributes nothing, and silently switches off both
+# agreement checks (MASK_AGREE_ON, MASK_SELF_AGREE_ON) because it has no
+# marks to agree with.  detect() used such a mask regardless.
+#
+# Measured over runs 31 and 32 (every mask, old and new, on every recording
+# of its channel), as the share of the recording its marks cover: the masks
+# that do not fit read 1.4% and 2.7% (Sky Mix, both masks, both recordings),
+# 2.0% (ITV1 HD's 5px mask on the ITV1 SD recording) and 7.4% (Channel 4 HD
+# on channel4-2).  Every mask that fits reads 44.6% or more - the lowest is
+# More 4 on more4-2 - and most read 58-88%.  25% sits in the middle of a
+# 37-point gap.  A skipped mask leaves the recording detected exactly as if
+# its channel had no mask; the corner search runs either way.
+MASK_FIT_MIN = 0.25
 
 # Require the mask to be BRIGHTER than the ring around it before the logo
 # counts as present, not merely edgier.
@@ -317,6 +407,61 @@ MASK_MIN_FILL = 0.25
 # better evidence than ten pixels scraping past at +0.36.  Small masks are
 # allowed, on condition that they are emphatic.
 MIN_MASK_PIXELS = 4
+
+# How much of a corner bracket the remembered mask may call "logo present"
+# before the bracket is discarded, and how close to either end of the
+# recording a bracket must be to escape the test.
+#
+# The corner search is generic - find something that stays in a corner - while
+# a remembered mask was learned from this channel from the user's own
+# corrected edit.  Where they disagree, the mask is the better witness.
+#
+# 0.60 sits in the gap the corpus actually measured, and the gap is NARROW:
+#
+#   more4  15-243   54%  CORRECT (head padding) - must survive
+#   tptv   512-550  67%  false positive        - must go
+#   tptv   1158-1262 71%  false positive        - must go
+#   legend 705-834  71%  false positive        - must go
+#   tptv   1412-1523 85%  false positive        - must go
+#
+# Thirteen points between the highest correct reading and the lowest wrong
+# one, on one recording each side, so this is NOT a wide flat band like
+# MAX_BOUNDARY_SHARE.  The boundary exemption is doing real work rather than
+# being belt-and-braces: more4's is head padding, where the channel logo
+# genuinely is present through the continuity before the programme starts.
+# If a future corpus narrows the gap further, prefer widening the exemption
+# over moving this number.  Measured over run 30, the corner data has no
+# cleaner line lower down: on u&dave3 a genuine advert's corner bracket reads
+# 42% and its sibling 55%, against a false one on tptv3 at 45%.
+MASK_AGREE_ON = 0.60
+
+# The same test applied to the remembered mask's OWN brackets.
+#
+# A mask bracket is a stretch where "absent" readings recur at least every 8
+# seconds (runs_of's merge_gap); the marks are stretches where "present"
+# readings recur at least every 4.  A logo that is really there but keeps
+# dropping under the threshold against a busy background - TPTV's thin
+# line-art logo against period wallpaper - satisfies BOTH, so it reads as a
+# break and as present at once.  Checked with the real functions: a logo lost
+# for one sample every 5 seconds becomes a 115-second bracket 100% covered by
+# its own marks, while real breaks - including one with seven bursts of
+# advert artwork in the corner - read 0-10%.
+#
+# Measured over run 30, every mask bracket that became a GENUINE advert read
+# 29% or less; the three that became false breaks read 56% (tptv 1199), 70%
+# (legend 706) and 74% (tptv 512).  0.50 sits in that gap with room either
+# side, which the corner figure above does not have.
+MASK_SELF_AGREE_ON = 0.50
+
+# How close to either end of the recording a bracket may be and escape both
+# tests.  Padding is where the channel logo is legitimately present inside a
+# correct cut (continuity either side of the programme): more4's head trim
+# starts at frame 0, and tptv-2's tail trim at 4506-4645 ends 36 seconds short
+# of the end, 77% covered, entirely inside the user's own tail cut.  Five
+# seconds exempted the first and not the second.  Sixty exempts both, and in
+# run 30 no bracket either rule dropped lies within 60 seconds of an end, so
+# the wider figure changes nothing the corner rule had measured.
+MASK_AGREE_EDGE = 60.0
 SMALL_MASK_CONTRAST = 0.60
 
 # How far either side of the programme the junction is looked for, when a
@@ -1025,8 +1170,11 @@ def logo_track(frames, times, chunk=512, verbose=False):
             print(f"    corner {c}: cluster {len(clust)}px, "
                   f"on {100 * on.mean():.1f}%", file=sys.stderr)
         # A logo that is on almost always or almost never is not being
-        # modulated by breaks and cannot bracket one.
-        if not (0.30 <= on.mean() <= 0.97):
+        # modulated by breaks and cannot bracket one.  Named constants so a
+        # measurement can widen the gate without touching detection - item
+        # 1g asks what the low side is throwing away, and an advert's own
+        # logo, on only through the breaks, lands there.
+        if not (CORNER_ON_MIN <= on.mean() <= CORNER_ON_MAX):
             continue
         found.append((c, len(clust), on))
 
@@ -1063,6 +1211,39 @@ def sustained(flag, times, min_len):
         if i is not None:
             prev = i
     return out
+
+
+def mask_disagreements(brackets, marks, duration, threshold):
+    """Split brackets into those the remembered mask allows and those it
+    contradicts.
+
+    `brackets` are (lo, hi, ...) tuples - anything after the first two
+    values is carried through untouched - and `marks` the mask's smoothed
+    "logo present" spans.  A bracket is contradicted when the marks cover
+    more than `threshold` of it, unless it lies within MASK_AGREE_EDGE of
+    either end of the recording, where padding legitimately carries the
+    channel logo.
+
+    Returns (kept, dropped) where dropped holds (lo, hi, fraction).  Only
+    ever removes: with no marks, everything is kept.
+    """
+    if not marks:
+        return list(brackets), []
+    kept, dropped = [], []
+    for br in brackets:
+        lo, hi = br[0], br[1]
+        span = hi - lo
+        touches_edge = (lo <= MASK_AGREE_EDGE
+                        or hi >= duration - MASK_AGREE_EDGE)
+        if span <= 0 or touches_edge:
+            kept.append(br)
+            continue
+        on = sum(max(0.0, min(b, hi) - max(a, lo)) for a, b in marks)
+        if on / span > threshold:
+            dropped.append((lo, hi, on / span))
+        else:
+            kept.append(br)
+    return kept, dropped
 
 
 def logo_brackets(logo_on, times):
@@ -1998,17 +2179,37 @@ def detect(video, verbose=False, keep=None, learn=None,
                 breaks_mask |= (times >= a) & (times < b)
             if not breaks_mask.any():
                 breaks_mask = junction_mask(programme, times)
+            # Score the masks this channel already has against the project
+            # first, while the frames are still here.  Each was learned from
+            # a DIFFERENT recording, so this is a fair test of it - unlike
+            # the candidate about to be learned below, which is fitted to
+            # this one.  See item 1p and pick_active().
+            if channel:
+                stored = store_get(load_store(store_path), channel)
+                if stored:
+                    info["mask_trials"] = trial_masks(
+                        frames, box, times, mask_history(stored),
+                        learn["cuts"], duration)
+
             report = []
             entry = learn_mask(frames, times, learn["starts"], programme,
                                breaks_mask, box, report)
             info["learn_report"] = report
             if entry and channel:
                 store = load_store(store_path)
-                store_set(store, channel, entry)
+                # Added to the channel's history rather than replacing what
+                # is there: a mask learned from THIS recording is fitted to
+                # it, so it only becomes the active mask once it has done
+                # well on a later project, or when the channel has nothing
+                # else (see MASK_HISTORY_MAX and mask_tier()).
+                merged = add_mask(store_get(store, channel) or {}, entry)
+                store_set(store, channel, merged)
                 save_store(store, store_path)
                 info["learned"] = entry["count"]
                 info["learned_kind"] = entry["kind"]
                 info["learned_contrast"] = entry["contrast"]
+                info["learned_active"] = same_mask(merged, entry)
+                info["learned_history"] = len(mask_history(merged))
             elif entry:
                 info["learned_but_unkeyed"] = entry["count"]
         elif channel:
@@ -2125,13 +2326,29 @@ def detect(video, verbose=False, keep=None, learn=None,
                     live = gated if (MASK_POLARITY_GATE and gated is not None) \
                         else ungated
                     marks, mask_br = _mask_arm(live)
-                    if mask_br is not None:
-                        info["mask_brackets"] = len(mask_br)
 
-                    if polarity_ab and gated is not None:
-                        other = ungated if MASK_POLARITY_GATE else gated
-                        alt_marks, mask_br_alt = _mask_arm(other)
-                        info["polarity_alt_marks"] = len(alt_marks)
+                    # Does this mask fit this recording at all?  See
+                    # MASK_FIT_MIN.  Judged on the live arm and applied to
+                    # both, so a polarity A/B never compares a used mask
+                    # with a skipped one.
+                    fit = (sum(b - a for a, b in marks) / duration
+                           if duration else 0.0)
+                    if fit < MASK_FIT_MIN:
+                        info["mask_unfit"] = round(fit, 3)
+                        if verbose:
+                            print(f"    mask: reads the logo in only "
+                                  f"{100 * fit:.1f}% of this recording - it "
+                                  f"does not fit, so it is not used",
+                                  file=sys.stderr)
+                        marks, mask_br = [], None
+                    else:
+                        if mask_br is not None:
+                            info["mask_brackets"] = len(mask_br)
+
+                        if polarity_ab and gated is not None:
+                            other = ungated if MASK_POLARITY_GATE else gated
+                            alt_marks, mask_br_alt = _mask_arm(other)
+                            info["polarity_alt_marks"] = len(alt_marks)
 
         del frames
     finally:
@@ -2230,7 +2447,7 @@ def detect(video, verbose=False, keep=None, learn=None,
     # bracket there overlaps both of the corner's, so it is filtered out here
     # just as it already lost the competition before; this does not fix that
     # split, only stops the mask winning a tie it never earned.
-    def _assemble(arm_mask_br, arm_verbose):
+    def _assemble(arm_mask_br, arm_verbose, arm_marks_track=None):
         """Everything downstream of the mask, for one presence arm.
 
         Split out so the polarity A/B can run it twice against one decode.
@@ -2245,6 +2462,45 @@ def detect(video, verbose=False, keep=None, learn=None,
         """
         logo_br_arm = list(logo_br)
         mask_short_ok_arm = []
+
+        # A CORNER bracket the remembered mask disagrees with is not a break.
+        #
+        # The corner search is a generic fallback: find something that stays
+        # in a corner and call it the logo.  A remembered mask is the opposite
+        # - it was learned from this channel, from this user's own corrected
+        # edit.  Where the two disagree the mask is the better witness, and
+        # measured over run 29 it is not close.
+        #
+        # On tptv the 57px mask's own gaps are EXACTLY the head padding and
+        # the three real adverts, while the corner search (TR, 26px) invents
+        # three breaks - and across all three the mask says the logo is
+        # present for 67%, 71% and 85% of the span.  Checked over the whole
+        # corpus: every confirmed false positive contradicts the mask, and
+        # NOT ONE genuine advert does.  (Legend's false break was counted in
+        # that check, but it is the mask's own bracket, not a corner one -
+        # legend has no corner - so this rule never reached it.  The mask
+        # rule below is what does.)
+        #
+        # Boundary brackets are exempt.  The one correct trim that contradicts
+        # the mask is more4's head padding, where the channel logo genuinely
+        # IS present through part of it - that is continuity before the
+        # programme starts, not an advert.
+        #
+        # Done BEFORE the mask's own brackets are merged in below, so the two
+        # rules each see only their own brackets and keep their own
+        # thresholds - the mask's are tested separately, further down.
+        #
+        # This can only ever REMOVE a break: with no mask, or a mask that
+        # agrees, nothing changes.
+        if arm_marks_track and logo_br_arm:
+            logo_br_arm, dropped_br = mask_disagreements(
+                logo_br_arm, arm_marks_track, duration, MASK_AGREE_ON)
+            if arm_verbose:
+                for lo, hi, frac in dropped_br:
+                    print(f"    dropped {lo:8.2f} - {hi:8.2f}: the "
+                          f"remembered mask says the logo is present for "
+                          f"{100 * frac:.0f}% of it", file=sys.stderr)
+
         if arm_mask_br is not None:
             uncovered = [
                 (lo, hi) for lo, hi in arm_mask_br
@@ -2269,6 +2525,29 @@ def detect(video, verbose=False, keep=None, learn=None,
                 (lo, hi) for lo, hi in uncovered
                 if not any(min(hi, d) - max(lo, c) > 0 for c, d in anchor_br)
             ]
+            # A mask bracket its own marks call mostly present is the
+            # detector losing a logo that is really there - see
+            # MASK_SELF_AGREE_ON.  Legend's only false break and two of
+            # tptv's were exactly this.
+            #
+            # This was once ruled circular: the marks are smoothed and the
+            # brackets are not, so a bracket could overlap its own marks at
+            # the edges and be dropped by its own evidence, and a synthetic
+            # caught one vanishing.  At real bracket lengths (MIN_BREAK_STRONG
+            # and up) a clean break reads 0% and a break full of advert
+            # artwork about 10%, and over run 30 no genuine advert read above
+            # 29% - so the threshold here sits well clear of that effect.
+            # Run after the corner and anchor filters, so it only judges
+            # brackets that would otherwise have been added.
+            if arm_marks_track and uncovered:
+                uncovered, dropped_own = mask_disagreements(
+                    uncovered, arm_marks_track, duration, MASK_SELF_AGREE_ON)
+                if arm_verbose:
+                    for lo, hi, frac in dropped_own:
+                        print(f"    dropped {lo:8.2f} - {hi:8.2f}: the "
+                              f"remembered mask's own marks say the logo is "
+                              f"present for {100 * frac:.0f}% of it",
+                              file=sys.stderr)
             logo_br_arm = logo_br_arm + [
                 (lo, hi, len(LOGO_LEVELS)) for lo, hi in uncovered]
             # Only these spans earn the shorter floor.  Recorded after the
@@ -2276,6 +2555,7 @@ def detect(video, verbose=False, keep=None, learn=None,
             # corner search or to an anchor does not smuggle the relaxation
             # in with it.
             mask_short_ok_arm = list(uncovered)
+
 
     # Shape brackets carry full support: they have no persistence level to
     # disagree about, and where both techniques apply the shape edges are
@@ -2366,6 +2646,19 @@ def detect(video, verbose=False, keep=None, learn=None,
                     brackets + arm_coincidence, events, analysis_end,
                     verbose=arm_verbose, duration=duration)
 
+        # The tail sweep (item 1e).  After everything else has settled, so it
+        # can only ever lengthen a break that already exists.
+        arm_swept = None
+        if arm_breaks:
+            arm_breaks, arm_swept = sweep_tail(arm_breaks, shape_br, sar_br,
+                                               duration)
+            if arm_swept and arm_verbose:
+                lo, hi, gained = arm_swept
+                print(f"    tail swept to the end: the picture's shape "
+                      f"changes at {lo:.2f} and stays changed to {hi:.2f}, "
+                      f"so {gained:.1f}s of continuity after the last break "
+                      f"is padding too", file=sys.stderr)
+
         # If nothing distinguishes anything, report nothing.  BBC One is what
         # this keeps correctly empty rather than inventing a break from black
         # frames alone - which is precisely what Comskip does on it.
@@ -2387,9 +2680,10 @@ def detect(video, verbose=False, keep=None, learn=None,
             "logo_brackets": len(logo_br_arm),
             "coincidence_brackets": len(arm_coincidence),
             "reason": arm_reason,
+            "tail_swept": arm_swept[2] if arm_swept else None,
         }
 
-    breaks, arm = _assemble(mask_br, verbose)
+    breaks, arm = _assemble(mask_br, verbose, marks if mask_br else None)
 
     info.update({
         "channel": channel,
@@ -2407,6 +2701,8 @@ def detect(video, verbose=False, keep=None, learn=None,
     })
     if arm["reason"]:
         info["reason"] = arm["reason"]
+    if arm.get("tail_swept"):
+        info["tail_swept"] = round(arm["tail_swept"], 2)
 
     # The other arm of the polarity A/B.  Run second and kept entirely out of
     # `info`'s own keys, so the reported result is the live arm's and reads
@@ -2414,7 +2710,8 @@ def detect(video, verbose=False, keep=None, learn=None,
     # verbosity: interleaving two runs' bracket traces makes both unreadable,
     # and the scores are what this mode is for.
     if polarity_ab and mask_br_alt is not None:
-        alt_breaks, alt_arm = _assemble(mask_br_alt, False)
+        alt_breaks, alt_arm = _assemble(mask_br_alt, False,
+                                        alt_marks if mask_br_alt else None)
         info["polarity_alt"] = alt_breaks
         info["polarity_alt_reason"] = alt_arm["reason"]
         info["polarity_gate_live"] = bool(MASK_POLARITY_GATE)
@@ -2861,6 +3158,319 @@ def store_set(store, key, entry):
     return store
 
 
+# How many masks a channel keeps, counting the one in use.
+#
+# Item 1p: a channel's mask can be replaced by a worse one - TalkingPictures
+# TV's was, and cost two false breaks - and neither contrast nor the
+# recording the replacement came from can say which is better.  A project
+# the user has corrected can: the logo is absent inside their cuts and
+# present outside.  That test is only fair for a mask learned from ANOTHER
+# recording, so each mask carries the record of the projects it has been
+# tested against, and the one with the best record is the one used.
+#
+# Four is enough for a channel to recover from a bad mask without the file
+# growing without limit; the worst-performing one is dropped when a fifth
+# arrives, and the mask in use is never dropped.
+MASK_HISTORY_MAX = 4
+
+# The fields that describe a mask, as learn_mask() returns them.  An entry
+# carries the ACTIVE mask's fields at its top level - exactly the shape every
+# reader already expects, including older builds - with the full history
+# beside it under "history".  No store version bump: a version 2 entry may
+# carry extra fields, and an older build ignores this one.
+MASK_FIELDS = ("pixels", "count", "kind", "contrast", "box")
+
+
+def mask_fields(entry):
+    """Just the mask part of an entry or history item."""
+    return {k: entry[k] for k in MASK_FIELDS if k in entry}
+
+
+# How many projects' results a mask keeps.  Enough to compare two masks on
+# common ground several times over; the oldest is dropped beyond this.
+MASK_TRIALS_KEEP = 8
+
+
+def blank_record():
+    """A mask nothing has been measured against yet.
+
+    `on` holds one result per project, keyed by the recording's file name:
+    {"prog": share of programme the logo was read in, "false": breaks it
+    would have invented, "fit": whether it fitted the recording at all}.
+
+    PER PROJECT, not totalled, because totals cannot be compared between
+    masks that have seen different recordings.  The first real test of this
+    showed why: Legend's 66px mask scored 6 invented breaks on a hard
+    recording and 1 on an easy one, while the 81px mask that replaced it had
+    only ever seen the easy one, where it scored 3.  Averaged, the 81px mask
+    looked better (3.0 against 3.5) and took over - though on the ONE
+    recording both had seen, the 66px mask beat it outright.  Masks are now
+    compared only on the projects they have both been scored against.
+    """
+    return {"on": {}}
+
+
+def mask_history(entry):
+    """Every mask a channel has, as [{"mask": ..., "record": ...}].
+
+    An entry written before this existed has no history, so its single mask
+    becomes one untested item - nothing needs relearning or migrating on
+    disk.
+
+    A record from the first version of this - totals rather than per-project
+    results - is DISCARDED rather than carried over: it was gathered under a
+    comparison that has since been shown wrong (see blank_record()), and
+    there is no way to split a total back into the projects that made it.
+    The mask keeps its place and starts its record again.
+    """
+    out = []
+    for item in entry.get("history") or []:
+        if isinstance(item, dict) and item.get("pixels"):
+            stored = item.get("record") or {}
+            record = dict(blank_record())
+            if isinstance(stored.get("on"), dict):
+                record["on"] = {
+                    str(k): {"prog": float(v.get("prog", 0.0) or 0.0),
+                             "false": int(v.get("false", 0) or 0),
+                             "fit": bool(v.get("fit", True))}
+                    for k, v in stored["on"].items() if isinstance(v, dict)
+                }
+            out.append({"mask": mask_fields(item), "record": record})
+    if out:
+        return out
+    if entry.get("pixels"):
+        return [{"mask": mask_fields(entry), "record": blank_record()}]
+    return []
+
+
+def mask_tier(record):
+    """How far a mask can be trusted at all, before any comparison.
+
+    2  proved itself: fitted at least one project it was scored against
+    1  never scored: just learned, and fitted to the recording it came from
+    0  failed everything it saw (see MASK_FIT_MIN)
+
+    An untested candidate sits ABOVE a mask that has failed everything and
+    BELOW one that has worked, which is what stops a mask learned from one
+    awkward recording taking over on the strength of that recording.
+    """
+    on = record.get("on") or {}
+    if not on:
+        return 1
+    return 2 if any(r.get("fit", True) for r in on.values()) else 0
+
+
+def beats(challenger, incumbent):
+    """Is `challenger` better than `incumbent` where BOTH were scored?
+
+    Only the projects they share can separate them - see blank_record().  On
+    those, fewer invented breaks wins, then more of the programme seen.  With
+    no shared project there is no evidence, so the incumbent stays.
+    """
+    mine = challenger.get("on") or {}
+    theirs = incumbent.get("on") or {}
+    shared = set(mine) & set(theirs)
+    if not shared:
+        return False
+    my_false = sum(mine[k].get("false", 0) for k in shared)
+    their_false = sum(theirs[k].get("false", 0) for k in shared)
+    if my_false != their_false:
+        return my_false < their_false
+    my_prog = sum(mine[k].get("prog", 0.0) for k in shared)
+    their_prog = sum(theirs[k].get("prog", 0.0) for k in shared)
+    return my_prog > their_prog
+
+
+def pick_active(history, incumbent=0):
+    """Index of the mask a channel should use.
+
+    The mask in use keeps its place unless a challenger beats it on the
+    projects they have both been scored against, or unless it has failed
+    everything it saw while a challenger has not.  Standing still is the
+    right default: a change of mask changes how every later recording on the
+    channel is cut, and it should take evidence.
+    """
+    if not history:
+        return 0
+    incumbent = min(max(incumbent, 0), len(history) - 1)
+    best = incumbent
+    for i, item in enumerate(history):
+        if i == best:
+            continue
+        here, there = item["record"], history[best]["record"]
+        if mask_tier(here) != mask_tier(there):
+            if mask_tier(here) > mask_tier(there):
+                best = i
+            continue
+        if beats(here, there):
+            best = i
+    return best
+
+
+def active_index(entry, history):
+    """Where the mask an entry is currently using sits in its history."""
+    current = mask_fields(entry)
+    for i, item in enumerate(history):
+        if same_mask(item["mask"], current):
+            return i
+    return 0
+
+
+def write_history(entry, history, active=None):
+    """Put `history` into `entry` and mirror the active mask to the top."""
+    entry = dict(entry)
+    for field in MASK_FIELDS:
+        entry.pop(field, None)
+    keep = active if active is not None else active_index(entry, history)
+    entry["history"] = [dict(item["mask"], record=dict(item["record"]))
+                        for item in history]
+    if history:
+        if active is None:
+            active = pick_active(history, keep)
+        entry.update(history[active]["mask"])
+    return entry
+
+
+def same_mask(a, b):
+    """Two masks with the same pixels in the same place are the same mask."""
+    return (a.get("count") == b.get("count")
+            and a.get("kind") == b.get("kind")
+            and a.get("pixels") == b.get("pixels"))
+
+
+def add_mask(entry, mask):
+    """Add a newly learned mask to a channel, keeping what it already had.
+
+    The candidate is untested, so it does NOT become the active mask while
+    any proven mask is there - see mask_tier().  When the history is full the
+    worst-ranked mask is dropped, never the active one.
+    """
+    history = mask_history(entry) if entry else []
+    mask = mask_fields(mask)
+    for item in history:
+        if same_mask(item["mask"], mask):
+            # Already known: keep its record rather than starting again.
+            return write_history(entry, history)
+    incumbent = active_index(entry, history) if entry else 0
+    history.append({"mask": mask, "record": blank_record()})
+    active = pick_active(history, incumbent)
+    while len(history) > MASK_HISTORY_MAX:
+        worst = min(
+            (i for i in range(len(history)) if i != active),
+            key=lambda i: (mask_tier(history[i]["record"]),
+                           len(history[i]["record"].get("on") or {}), -i),
+        )
+        history.pop(worst)
+        if worst < active:
+            active -= 1
+    return write_history(entry, history, active)
+
+
+def record_result(entry, mask, prog, false_count, fitted, project=""):
+    """Note how `mask` did against one corrected project.
+
+    `project` names the recording, so two masks scored against the same one
+    can be compared on it later - see beats().  Without a name there is
+    nothing to compare on, and the result is not kept.
+    """
+    if not project:
+        return entry
+    history = mask_history(entry)
+    for item in history:
+        if same_mask(item["mask"], mask):
+            on = item["record"].setdefault("on", {})
+            on[str(project)] = {"prog": float(prog),
+                                "false": int(false_count),
+                                "fit": bool(fitted)}
+            while len(on) > MASK_TRIALS_KEEP:
+                del on[next(iter(on))]
+            break
+    return write_history(entry, history)
+
+
+# How many corrected projects a mask must have been tested against before a
+# channel stops testing on every save.  Three agreeing projects is enough to
+# trust a mask that has nothing to compete with; a channel carrying more than
+# one mask keeps testing, because there is still something to decide.
+MASK_TRIALS_ENOUGH = 3
+
+# Seconds either side of a cut boundary left out of a mask's score.  The
+# user's cut and the picture's own change can differ by a moment, and neither
+# is wrong.
+MASK_TRIAL_EDGE = 3.0
+
+
+def score_mask_project(track, times, cuts, duration):
+    """How well one mask's reading agrees with a project the user corrected.
+
+    Measured over runs 31-33 (see CHALKLINE.md): what separates a good mask
+    from a bad one is NOT how much of the advert breaks it reads as absent -
+    other techniques find breaks perfectly well without the logo - but how
+    much of the PROGRAMME it reads the logo in, and how many breaks it would
+    invent there.  Both are the mask's own job, and getting them wrong cuts
+    programme.
+
+    Padding is left out: the channel's logo is legitimately on screen through
+    the continuity either side of a programme.
+    """
+    present = track > MASK_ON
+    marks = runs_of(present, times, min_len=2.0, merge_gap=4.0)
+    absences = runs_of(~present, times, min_len=MIN_BREAK_STRONG)
+
+    covered = sum(b - a for a, b in marks)
+    fitted = bool(duration) and (covered / duration) >= MASK_FIT_MIN
+
+    in_cut = np.zeros(len(times), dtype=bool)
+    near = np.zeros(len(times), dtype=bool)
+    for a, b in cuts:
+        in_cut |= (times >= a) & (times < b)
+        near |= (
+            (np.abs(times - a) <= MASK_TRIAL_EDGE)
+            | (np.abs(times - b) <= MASK_TRIAL_EDGE)
+        )
+    on = np.zeros(len(times), dtype=bool)
+    for a, b in marks:
+        on |= (times >= a) & (times < b)
+
+    programme = ~in_cut & ~near
+    prog = float(on[programme].mean()) if programme.any() else 0.0
+
+    # Breaks this mask would invent: an absence long enough to become a
+    # bracket, lying wholly outside the user's cuts, that the self-agreement
+    # rule would not drop and the boundary exemption would not excuse.
+    kept, _dropped = mask_disagreements(absences, marks, duration,
+                                        MASK_SELF_AGREE_ON)
+    false = 0
+    for lo, hi in kept:
+        if lo <= MASK_AGREE_EDGE or hi >= duration - MASK_AGREE_EDGE:
+            continue
+        if not any(min(hi, d) - max(lo, a) > 0 for a, d in cuts):
+            false += 1
+    return {"prog": prog, "false": false, "fitted": fitted}
+
+
+def trial_masks(frames, box, times, history, cuts, duration):
+    """Score every mask a channel has against one corrected project.
+
+    Fair for masks learned from OTHER recordings, which is the point - see
+    item 1p.  A candidate learned from this one would flatter itself here, so
+    it is added to the history untested and has to prove itself later.
+    """
+    trials = []
+    for item in history:
+        try:
+            mask = mask_to_pixels(item["mask"], box)
+        except Exception:
+            continue
+        if mask is None or not mask.any():
+            continue
+        result = score_mask_project(mask_track(frames, mask), times, cuts,
+                                    duration)
+        result["mask"] = item["mask"]
+        trials.append(result)
+    return trials
+
+
 def store_display_name(entry):
     """The human-readable key, or "" when only a service id is known."""
     for key in entry.get("keys", []):
@@ -2964,7 +3574,7 @@ def _padding_edges(found, padding, duration):
     taking the +1599.54 reading with it.  That reading is the only thing that
     showed the programme being destroyed, so it has to survive.
     """
-    errors, missed = [], 0
+    errors, missed, unswept = [], 0, []
     for a, b in padding:
         head = a <= PADDING_TOLERANCE
         tail = b >= duration - PADDING_TOLERANCE
@@ -2977,17 +3587,45 @@ def _padding_edges(found, padding, duration):
         if not over:
             missed += 1
             continue
+
+        # The INNER EDGE and the LEFTOVER are two different questions, and
+        # reporting one number for both was badly misleading.
+        #
+        # The inner edge is the boundary with the PROGRAMME, so it is the
+        # bracket FURTHEST FROM the recording's edge that defines it: the
+        # latest-ending bracket for a head, the earliest-starting one for a
+        # tail.  Getting this backwards is what produced the misleading
+        # figures - the tail was measured from the LATEST-ending bracket's
+        # start, which is the inner edge only if the tail was cut in one
+        # piece.  Cut in two, it reported the start of the SECOND fragment:
+        # tptv-2 scored +781.94 when its trim actually begins 0.4s from
+        # truth, itv1-3 +395.14 against a real +0.8, u&dave3 +391.67 against
+        # +10.8.  Three conclusions were drawn from those figures and all
+        # three were wrong - that tails are six times worse than heads, that
+        # shape data would fix the worst of them, and that u&dave3 was beyond
+        # reach.  None survived checking the brackets themselves.
+        #
+        # So measure the edge from the bracket nearest the programme, and
+        # report what is LEFT INSIDE the padding separately.  A trim that is
+        # accurate but fragmented now reads as accurate but fragmented.
         if head:
-            # The earliest overlapping bracket is the head trim; its END is
-            # the edge being measured.  Earliest rather than furthest-reaching
-            # because a trim split into fragments should report where the
-            # FIRST one stops - that is where kept padding starts again.
-            errors.append(min(over, key=lambda d: d[0])[1] - b)
+            edge_br = max(over, key=lambda d: d[1])
+            errors.append(edge_br[1] - b)
+            lo, hi = a, min(b, edge_br[1])
         else:
-            # Mirror image: the latest overlapping bracket is the tail trim
-            # and its START is the edge.
-            errors.append(max(over, key=lambda d: d[1])[0] - a)
-    return errors, missed
+            edge_br = min(over, key=lambda d: d[0])
+            errors.append(edge_br[0] - a)
+            lo, hi = max(a, edge_br[0]), b
+
+        # Padding this region still holds: the part between the recording's
+        # edge and the inner edge that no bracket removes.
+        left = max(0.0, hi - lo)
+        for d in over:
+            left -= max(0.0, min(d[1], hi) - max(d[0], lo))
+        if left > PADDING_TOLERANCE:
+            unswept.append(left)
+
+    return errors, missed, unswept
 
 
 def score(found, vprj):
@@ -3014,7 +3652,7 @@ def score(found, vprj):
     mean = sum(abs(e) for e in errors) / len(errors) if errors else 0.0
     # Measured against the FULL detected list, not `real`: the head and tail
     # brackets are precisely the ones `real` has just thrown away.
-    pad_errors, pad_missed = _padding_edges(
+    pad_errors, pad_missed, pad_unswept = _padding_edges(
         found, padding, max(duration, max((b for _a, b in truth), default=0.0)))
     pad_mean = (sum(abs(e) for e in pad_errors) / len(pad_errors)
                 if pad_errors else 0.0)
@@ -3028,6 +3666,12 @@ def score(found, vprj):
         "pad_mean_error": pad_mean,
         "pad_missed": pad_missed,
         "pad_errors": pad_errors,
+        # Padding regions whose trim is FRAGMENTED - the edge is right but
+        # material survives inside.  Reported apart from the edge error
+        # because they are different faults with different fixes, and
+        # conflating them produced three wrong conclusions in one session.
+        "pad_unswept": pad_unswept,
+        "pad_unswept_total": sum(pad_unswept),
     }
 
 
@@ -3177,15 +3821,19 @@ MAX_ADVERT_FRACTION = 0.5
 def check_learnable(cuts, duration):
     """Decide whether a saved project is fit to learn a logo from.
 
-    Returns (breaks, reason).  `breaks` is the advert breaks with the
-    recording's padding removed, or None when the project should not be
+    Returns (breaks, reason).  `breaks` is the advert breaks with any
+    recording padding removed, or None when the project should not be
     learned from at all - in which case `reason` says why, in a form fit for
     a log line.
+
+    Padding is stripped where it exists and NOT required: see the note at the
+    end of this function.  A recording made without it is perfectly
+    learnable, and most PVRs do not pad by default.
     """
     if not cuts:
         return None, "the project has no cuts"
 
-    adverts, padding = split_truth(cuts, duration)
+    adverts, _padding = split_truth(cuts, duration)
     if not adverts:
         return None, "the only cuts are the recording's own padding"
 
@@ -3215,19 +3863,40 @@ def check_learnable(cuts, duration):
             return None, (f"the cuts remove {removed / duration:.0%} of the "
                           f"recording, which is too much to be adverts")
 
-    # Padding at one end at least.  Both PVRs pad every recording, so its
-    # absence means either the file has already been cut - in which case the
-    # break boundaries are no longer where the logo changes - or the edit is
-    # only part done.
-    if not padding:
-        return None, ("neither end of the recording is padded, so this looks "
-                      "like an already-cut file rather than a raw recording")
+    # NO padding requirement.  A recording without it is not suspect.
+    #
+    # This used to refuse any project where neither end was padded, on the
+    # grounds that "both PVRs pad every recording" - meaning the two the
+    # author uses, set up the way he sets them up.  All three PVRs the user
+    # has run (Tvheadend, Plex, Jellyfin) offer pre- and post-episode padding
+    # and NONE enable it by default, so anyone on default settings recorded
+    # without it, cut their adverts, saved, and was told their raw recording
+    # "looks like an already-cut file".  They could never teach Snipwright a
+    # logo, and nothing said why in terms they could act on.
+    #
+    # The padding contributes nothing to what is learned in any case: this
+    # function strips it and returns only the adverts, so a padded and an
+    # unpadded edit of the same recording learn from the identical
+    # boundaries.  It was a proxy for "this is a raw recording", and a wrong
+    # one.
+    #
+    # The risk it was guarding is real - learning compares logo presence
+    # either side of each boundary, so an ALREADY CUT file has joins rather
+    # than transitions there and would teach nonsense.  The checks above
+    # cover it far better than padding did, and they test the cuts rather
+    # than the user's PVR settings: every break a plausible length, and under
+    # half the recording removed.  A cut file would have to pass both while
+    # still being a cut file.
+    #
+    # If a better test for "already cut" is ever wanted, look for it in the
+    # video rather than in the cut list - a join leaves no logo transition,
+    # which is the thing that actually matters here.
 
     return adverts, ""
 
 
 def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
-                       only_if_unknown=True, progress_cb=None,
+                       only_if_unknown=True, corrected=True, progress_cb=None,
                        cancel_cb=None, on_start=None):
     """Learn this channel's logo from a project the user has corrected.
 
@@ -3252,6 +3921,13 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     about to take minutes rather than milliseconds.  Everything before it
     costs an ffprobe, so a caller that announced the work any earlier would
     be announcing it for every save.
+
+    A channel that already has a logo is no longer skipped: its masks are
+    SCORED against this project (each was learned from another recording, so
+    the test is fair) and the candidate learned here joins the history
+    untested.  `corrected` says whether the saved cuts differ from what the
+    detector proposed - False means the user agreed with it, which teaches a
+    settled channel nothing and is not worth a decode.
     """
     info = {}
     if not os.path.isfile(video):
@@ -3278,14 +3954,25 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
         return info
     info["channel"] = key
 
-    if only_if_unknown and store_get(load_store(store_path), key) is not None:
-        # The cautious first version of this: never replace a mask that is
-        # already working.  Relearning on every save would mean one poor edit
-        # quietly undoing a good mask, and there is no way for the user to
-        # tell that had happened.  Deleting the entry by hand is the way to
-        # force a fresh one for now.
-        info["skipped"] = f"a logo is already remembered for {key}"
-        return info
+    # A channel that already has a logo used to stop here, so one poor edit
+    # could not quietly undo a good mask.  It cannot now either: the masks
+    # are scored against this project and a candidate only takes over on its
+    # record, never on the recording it came from (see pick_active()).  What
+    # is still worth avoiding is the decode itself, so a channel with
+    # nothing left to decide is skipped.
+    existing = store_get(load_store(store_path), key)
+    if only_if_unknown and existing is not None:
+        history = mask_history(existing)
+        on = history[0]["record"].get("on", {}) if history else {}
+        settled = (
+            len(history) == 1
+            and len(on) >= MASK_TRIALS_ENOUGH
+            and all(r.get("fit", True) for r in on.values())
+        )
+        if settled and not corrected:
+            info["skipped"] = (f"{key}'s logo is settled and this project "
+                               f"agrees with what was proposed")
+            return info
 
     # A programme segment starts where the head padding ends and where each
     # break ends - those are the moments the logo appears, which is what an
@@ -3329,23 +4016,61 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     info["analysis_frames"] = detected.get("analysis_frames")
     info["analysis_expected"] = detected.get("analysis_expected")
 
+    # Apply what the masks scored on this project.  detect() has already put
+    # any candidate into the history (untested), so reload and record against
+    # what is there now; the active mask is re-chosen as the records change.
+    trials = detected.get("mask_trials") or []
+    if trials:
+        store = load_store(store_path)
+        entry = store_get(store, key)
+        if entry:
+            before = mask_fields(entry)
+            project = os.path.basename(video)
+            for trial in trials:
+                entry = record_result(entry, trial["mask"], trial["prog"],
+                                      trial["false"], trial["fitted"],
+                                      project=project)
+            store_set(store, key, entry)
+            save_store(store, store_path)
+            info["trials"] = [
+                {"count": t["mask"].get("count"), "prog": round(t["prog"], 3),
+                 "false": t["false"], "fitted": t["fitted"]}
+                for t in trials
+            ]
+            info["masks_held"] = len(mask_history(entry))
+            info["active_count"] = entry.get("count")
+            info["active_changed"] = not same_mask(before, entry)
+
     info["report"] = detected.get("learn_report", [])
     if detected.get("learned"):
         info["learned"] = detected["learned"]
         info["kind"] = detected.get("learned_kind")
         info["contrast"] = detected.get("learned_contrast")
+        # Whether the new mask is the one the channel will now use, or is
+        # waiting behind a mask that has already proved itself.
+        info["learned_active"] = bool(detected.get("learned_active"))
     else:
-        # learn_mask() rejects a mask it cannot believe in, which is most of
-        # them.  Not a failure: the corner search carries on as before.
+        # Which explanation is the useful one depends on how far it got.
         #
-        # But detect() may have given up long before reaching the mask - if
-        # the decode produced no frames, for instance - and it says so in
-        # `reason`.  That was thrown away here, so a user whose analysis had
-        # not run at all was told the logo was not clear enough, which sent
-        # two people looking at the logo instead of at the decode.  Report
-        # what actually happened when detect() knows.
-        info["skipped"] = (detected.get("reason")
-                           or "no logo clear enough to remember")
+        # detect() sets `reason` for its own outcome, and that is the right
+        # thing to report when it gave up BEFORE the mask was ever looked at
+        # - "no analysis frames" being the case that mattered, where a
+        # Windows decode never ran and the user was told their logo was not
+        # clear enough.
+        #
+        # But "no technique proposed a break" is also a `reason`, and it is
+        # set when detect ran to completion and simply found nothing.
+        # Learning can have run perfectly well in that case and rejected the
+        # mask on its own terms, and saying "no technique proposed a break"
+        # then points at advert detection when the answer is in the logo.
+        # The learn report existing is what tells the two apart: if
+        # learn_mask() produced lines, it ran, and its verdict is the one to
+        # give.
+        if info["report"]:
+            info["skipped"] = "no logo clear enough to remember"
+        else:
+            info["skipped"] = (detected.get("reason")
+                               or "no logo clear enough to remember")
     return info
 
 
@@ -3405,6 +4130,14 @@ def main():
         for line in info.get("learn_report", []):
             print(f"  {line}")
 
+    if info.get("tail_swept"):
+        print(f"tail swept to the end of the recording: "
+              f"{info['tail_swept']:.1f}s of continuity after the last break "
+              f"trimmed as padding")
+    if info.get("mask_unfit") is not None:
+        print(f"remembered {info.get('mask_pixels')}px {info.get('mask_kind')} "
+              f"mask not used: it reads the logo in only "
+              f"{100 * info['mask_unfit']:.1f}% of this recording")
     if info.get("mask_brackets"):
         print(f"remembered {info.get('mask_pixels')}px {info.get('mask_kind')} "
               f"mask supplied {info['mask_brackets']} brackets")
@@ -3453,8 +4186,12 @@ def main():
         if r["pad_edges"] or r["pad_missed"]:
             miss = (f", {r['pad_missed']} not trimmed"
                     if r["pad_missed"] else "")
+            left = (f", {len(r['pad_unswept'])} fragmented "
+                    f"({r['pad_unswept_total']:.0f}s left inside)"
+                    if r["pad_unswept"] else "")
             print(f"  {tag}padding {r['pad_within5']}/{r['pad_edges']} "
-                  f"edges within 5s, mean {r['pad_mean_error']:.2f}s{miss}")
+                  f"edges within 5s, mean {r['pad_mean_error']:.2f}s"
+                  f"{miss}{left}")
             if r["pad_errors"]:
                 print(f"  {tag}padding errors: " +
                       "  ".join(f"{e:+.2f}" for e in r["pad_errors"]))

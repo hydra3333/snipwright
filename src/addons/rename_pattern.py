@@ -67,6 +67,60 @@ def _episodes(meta):
     return eps or []
 
 
+# A part marker at the END of an episode title: "(1)", "Part 2", "Pt. 1",
+# "Part One".  Anchored to the end and allowed only a small set of forms,
+# because a title can legitimately contain a number and we are only ever
+# trying to remove the bit that says WHICH PART.
+_PART_MARKER = re.compile(
+    r"""\s*(?:
+            [(\[]\s*(?:\d{1,2}|[IVX]{1,4}|one|two|three|four)\s*[)\]]
+          | [-,:]?\s*(?:part|pt\.?)\s*
+            (?:\d{1,2}|[IVX]{1,4}|one|two|three|four)
+        )\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def strip_part_marker(title):
+    """Drop a trailing part marker from an episode title.
+
+    "Children of the Gods (1)" -> "Children of the Gods".  Returns the title
+    unchanged when there is nothing that looks like a marker, and never
+    returns an empty string - a title that is ONLY a marker keeps its
+    original form rather than vanishing.
+    """
+    if not title:
+        return title
+    out = _PART_MARKER.sub("", title).strip()
+    return out or title
+
+
+def combine_titles(titles):
+    """One title for a file that holds several episodes.
+
+    A double episode is usually one story split in two, so TMDB carries it as
+    "Children of the Gods (1)" and "Children of the Gods (2)".  Naming the
+    file after the first alone gives `S01E01-02 - Children of the Gods (1)`,
+    where the numbering says two episodes and the title says part one.  The
+    user reported exactly that.
+
+    So strip the part markers and see what is left.  If every part reduces to
+    the same story, that is the title.  If they genuinely differ - two
+    unrelated episodes shown back to back - keep both, joined, rather than
+    silently dropping one.
+
+    Order is preserved and duplicates removed, so three parts of one story
+    still give one title.
+    """
+    seen, out = set(), []
+    for t in titles:
+        s = strip_part_marker(t)
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return " & ".join(out)
+
+
 def _render(pattern, meta):
     """Substitute the codes in ``pattern`` into raw text.
 

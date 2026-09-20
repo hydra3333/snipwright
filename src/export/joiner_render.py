@@ -672,23 +672,65 @@ class JoinerRenderWorker(QThread):
         # replaces.
         from export.audio_repair import layout_name, source_profile
 
-        profiles = [source_profile(seg) for seg in segments]
-        channels = max([c for c, _b in profiles if c] or [2])
-        rates = [b for _c, b in profiles if b]
-        layout = layout_name(channels)
-        rate_text = ("%d kbps" % (max(rates) // 1000) if rates
-                     else "the encoder's own rate")
-        logger.info(
-            "Joiner: re-encoding audio as %s (%d channel(s)) at %s.",
-            layout, channels, rate_text,
-        )
+        # How many audio tracks can be carried through.
+        #
+        # concat needs every input to contribute the same number of audio
+        # streams, so the most that can be carried is the FEWEST any segment
+        # has.  This used to take `[%d:a:0]` from each and concatenate with
+        # `a=1`, so a join that had to re-encode came out with one audio track
+        # however many went in - an audio description or second language was
+        # dropped without a word.  The lossless path lost them too until
+        # 2.7.2; this is the same fault in the other half.
+        counts = [len(_audio_track_info(seg)) for seg in segments]
+        tracks = min(counts) if counts else 0
+        if tracks and min(counts) != max(counts):
+            logger.warning(
+                "Joiner: the scenes have different numbers of audio tracks "
+                "(%s); carrying %d, which is all they have in common.",
+                ", ".join(str(c) for c in counts), tracks,
+            )
+            self._notes.append((
+                "some audio tracks could not be carried through",
+                "The scenes do not all have the same number of audio tracks "
+                "(%s), and joining by re-encoding can only carry the ones "
+                "they share. %d track(s) were kept."
+                % (", ".join(str(c) for c in counts), tracks),
+            ))
+        if tracks == 0:
+            logger.warning("Joiner: no audio track common to every scene.")
+
+        # Per TRACK, not once for the whole file: a 5.1 main track and a
+        # stereo audio-description track want different layouts, and forcing
+        # both to the widest would inflate the AD track to six channels of
+        # mostly silence.
+        track_layouts, track_rates = [], []
+        for k in range(tracks):
+            profiles = [source_profile(seg, k) for seg in segments]
+            ch = max([c for c, _b in profiles if c] or [2])
+            br = [b for _c, b in profiles if b]
+            track_layouts.append(layout_name(ch))
+            track_rates.append(max(br) if br else None)
+            logger.info(
+                "Joiner: re-encoding audio track %d as %s (%d channel(s)) "
+                "at %s.", k + 1, layout_name(ch), ch,
+                ("%d kbps" % (max(br) // 1000)) if br
+                else "the encoder's own rate",
+            )
+
+        shape = "; ".join(
+            "track %d as %s at %s"
+            % (k + 1, track_layouts[k],
+               ("%d kbps" % (track_rates[k] // 1000)) if track_rates[k]
+               else "the encoder's own rate")
+            for k in range(tracks)
+        ) or "no audio"
         self._notes.append((
             "the scenes were re-encoded to join them",
             "These scenes did not match closely enough to be joined without "
             "re-encoding, so the picture was re-encoded and the audio was "
-            "brought to a common shape: %s (%d channel(s)) at %s. Scenes that "
+            "brought to a common shape: %s. Scenes that "
             "match can be joined losslessly instead."
-            % (layout, channels, rate_text),
+            % (shape,),
         ))
 
         inputs = []
@@ -720,31 +762,40 @@ class JoinerRenderWorker(QThread):
                 "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%d,"
                 "format=yuv420p%s[v%d]"
                 % (i, width, height, width, height, fps, fade, i))
-            filters.append(
-                "[%d:a:0]aresample=48000,"
-                "aformat=sample_fmts=fltp:channel_layouts=%s[a%d]"
-                % (i, layout, i))
-            labels.append("[v%d][a%d]" % (i, i))
+            # One audio chain per track, each brought to ITS OWN layout.
+            for k in range(tracks):
+                filters.append(
+                    "[%d:a:%d]aresample=48000,"
+                    "aformat=sample_fmts=fltp:channel_layouts=%s[a%d_%d]"
+                    % (i, k, track_layouts[k], i, k))
+            labels.append("[v%d]%s" % (
+                i, "".join("[a%d_%d]" % (i, k) for k in range(tracks))))
 
-        filters.append("%sconcat=n=%d:v=1:a=1[outv][outa]"
-                       % ("".join(labels), len(segments)))
+        outs = "".join("[outa%d]" % k for k in range(tracks))
+        filters.append("%sconcat=n=%d:v=1:a=%d[outv]%s"
+                       % ("".join(labels), len(segments), tracks, outs))
 
         total = max(0.001, sum(durations))
         cmd = [
             "ffmpeg", "-hide_banner", "-nostats", "-y",
             *inputs,
             "-filter_complex", ";".join(filters),
-            "-map", "[outv]", "-map", "[outa]",
+            "-map", "[outv]",
+        ]
+        for k in range(tracks):
+            cmd += ["-map", "[outa%d]" % k]
+        cmd += [
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             # Keep the source bit depth; see media/pixfmt.py.
             "-pix_fmt", _joiner_pix_fmt(segments),
             "-c:a", "aac",
         ]
-        # No -b:a at all when the source rate cannot be read: the encoder's own
-        # default scales with the channel count, which is closer to right than
-        # any figure invented here.
-        if rates:
-            cmd += ["-b:a", "%dk" % (max(rates) // 1000)]
+        # Per-track bitrate, and none at all where the source rate could not
+        # be read: the encoder's own default scales with the channel count,
+        # which is closer to right than any figure invented here.
+        for k in range(tracks):
+            if track_rates[k]:
+                cmd += ["-b:a:%d" % k, "%dk" % (track_rates[k] // 1000)]
         cmd += ["-progress", "pipe:1", joined]
         self._run_with_progress(cmd, total, "Re-encoding and joining scenes…")
         if not os.path.exists(joined):

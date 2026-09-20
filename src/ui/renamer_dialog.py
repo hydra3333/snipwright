@@ -56,6 +56,7 @@ from config.loader import save_config
 from addons.filename_parse import parse_filename
 from addons.rename_pattern import (
     DEFAULT_TV_PATTERN,
+    combine_titles,
     format_path,
     load_user_presets,
     store_user_presets,
@@ -236,6 +237,16 @@ def apply_series_to_rows(client, rows, series, pattern):
         if title is None:
             r.new_name, r.note = None, "episode not on TMDB"
             continue
+        if len(r.episodes) > 1:
+            # A file holding several episodes should not be named after the
+            # first one alone.  TMDB carries a two-parter as "... (1)" and
+            # "... (2)", so taking part one's title gave names like
+            # `S01E01-02 - Children of the Gods (1)` - the numbering saying
+            # two episodes and the title saying part one.
+            parts = [titles.get((r.season, e)) for e in r.episodes]
+            combined = combine_titles([p for p in parts if p])
+            if combined:
+                title = combined
         meta = {
             "name": series["name"],
             "year": series["year"],

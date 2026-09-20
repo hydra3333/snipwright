@@ -109,12 +109,16 @@ class ChalklineLearnWorker(QThread):
     started_learning = Signal(str)   # emits the channel key, decode starting
 
     def __init__(self, video_path, vprj_path, parent=None,
-                 store_path=LOGO_STORE, channel=None):
+                 store_path=LOGO_STORE, channel=None, corrected=True):
         super().__init__(parent)
         self.video_path = video_path
         self.vprj_path = vprj_path
         self.store_path = store_path
         self.channel = channel
+        # False when the saved cuts are the detector's own, unchanged: a
+        # settled channel learns nothing from being told it was right, and
+        # the decode is minutes long.
+        self.corrected = corrected
         self._cancel = False
 
     def cancel(self):
@@ -127,6 +131,7 @@ class ChalklineLearnWorker(QThread):
                 self.vprj_path,
                 store_path=self.store_path,
                 channel=self.channel,
+                corrected=self.corrected,
                 cancel_cb=lambda: self._cancel,
                 on_start=self.started_learning.emit,
             )

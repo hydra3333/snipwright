@@ -184,6 +184,32 @@ def _output_duration_seconds(path):
         return 0.0
 
 
+def _source_clock_jumps(source):
+    """Leaps in the source's clock, as (seconds into the recording, amount).
+
+    A broadcast recording's timestamps can leap hours forward in the middle of
+    a programme with no pictures missing - two Channel 4 HD recordings jumped
+    6h34m around twenty minutes in.  smartcut closes such a gap as it cuts
+    (see find_clock_jumps); this reports the same jumps on the timeline the
+    segments here use, so the log and the chapter positions can close it too.
+    """
+    try:
+        from smartcut.smart_cut import find_clock_jumps
+        origin = source.start_time
+        return [
+            (float(split - origin), float(amount))
+            for split, amount in find_clock_jumps(source)
+        ]
+    except Exception:
+        logger.debug("Clock-jump scan failed; assuming none", exc_info=True)
+        return []
+
+
+def _jump_between(clock_jumps, t0, t1):
+    """Total clock jump, in seconds, lying strictly between t0 and t1."""
+    return sum(amount for split, amount in clock_jumps if t0 < split < t1)
+
+
 def ranges_to_segments(source, keep_ranges, frame_index=None):
     """Convert kept frame ranges to (start_time, end_time) segments.
 
@@ -1542,7 +1568,8 @@ def _chapter_marks(segment_durations, extra_marks=None):
     return merged, total
 
 
-def _marks_in_output(markers, keep_ranges, frame_index, segment_durations):
+def _marks_in_output(markers, keep_ranges, frame_index, segment_durations,
+                     clock_jumps=()):
     """Convert source-frame chapter marks into output times, in seconds.
 
     A mark only survives if it falls inside a kept range - one sitting in cut
@@ -1552,7 +1579,9 @@ def _marks_in_output(markers, keep_ranges, frame_index, segment_durations):
 
     Times come from the frame index rather than frame arithmetic, for the same
     reason the scene joins do: on field-coded HD the per-frame spacing is not
-    a uniform 1/fps, so counting frames drifts.
+    a uniform 1/fps, so counting frames drifts.  Any leap in the source clock
+    between the range start and the mark (see _source_clock_jumps) is taken
+    out, as the cut itself takes it out.
     """
     if not markers:
         return []
@@ -1567,9 +1596,11 @@ def _marks_in_output(markers, keep_ranges, frame_index, segment_durations):
 
             if start <= mark <= end:
                 try:
+                    mark_s = frame_index.seconds_of(mark)
+                    start_s = frame_index.seconds_of(start)
                     into = (
-                        frame_index.seconds_of(mark)
-                        - frame_index.seconds_of(start)
+                        mark_s - start_s
+                        - _jump_between(clock_jumps, start_s, mark_s)
                     )
                 except Exception:
                     break
@@ -2040,6 +2071,7 @@ def _write_mkv_chapters_ffmpeg(ts_path, mkv_path, segment_durations,
             "-i", meta_path,
             "-map", "0:v",
             "-map", "0:a?",
+            "-map", "0:s?",
             "-map_metadata", "1",
         ]
         if audio_reencode:
@@ -3163,7 +3195,9 @@ def _graft_source_audio(video_path, source_path, scene_times, n_audio,
         cmd += ["-map", "0:v"]
         for i in range(len(tmp_tracks)):
             cmd += ["-map", "%d:a" % (i + 1)]
-        cmd += ["-c", "copy"]
+        # The cut's subtitles come from the video input, and are dropped if
+        # nothing names them.
+        cmd += ["-map", "0:s?", "-c", "copy"]
         if vdur > 0:
             cmd += ["-t", "%.3f" % vdur]
         cmd += ["-muxpreload", "0", "-muxdelay", "0", out_tmp]
@@ -3360,10 +3394,10 @@ def _rebuild_audio_from_source(video_path, source_path, scene_times,
             "total_scenes": 1,
         })
 
-    cmd += ["-filter_complex", filt, "-map", "0:v"]
+    cmd += ["-filter_complex", filt, "-map", "0:v", "-map", "0:s?"]
     for t in build_tracks:
         cmd += ["-map", f"[aout{t}]"]
-    cmd += ["-c:v", "copy", "-c:a", "aac"]
+    cmd += ["-c:v", "copy", "-c:a", "aac", "-c:s", "copy"]
     for out_idx, t in enumerate(build_tracks):
         # ~64 kbps per channel (so stereo ~128k, 5.1 ~384k), floored at 128k.
         cmd += [f"-b:a:{out_idx}", f"{max(128, chans(t) * 64)}k"]
@@ -3444,10 +3478,19 @@ def _reencode_cut_audio_to_aac(cut_path, bitrate, cancel_cb=None):
     Returns True on success; on failure the original cut is left untouched so
     the caller can fall back to rebuilding the audio from source.
     """
-    tmp = cut_path + ".aac.ts"
+    # The cut's own container, not always a .ts: since item 1q a cut bound
+    # for .mkv can be Matroska, and writing this pass out as a transport
+    # stream would drop the very subtitles that intermediate exists to keep.
+    tmp = cut_path + ".aac" + (os.path.splitext(cut_path)[1] or ".ts")
     cmd = [
         "ffmpeg", "-y", "-i", cut_path,
-        "-map", "0:v?", "-map", "0:a", "-c:v", "copy", "-c:a", "aac",
+        # Subtitles too.  Every one of these rebuild passes names the
+        # streams it wants, and a stream nobody names is dropped: this one
+        # silently threw away a recording's DVB subtitles, and the user only
+        # found out by watching the export.  "?" so a recording without them
+        # still works.
+        "-map", "0:v?", "-map", "0:a", "-map", "0:s?",
+        "-c:v", "copy", "-c:a", "aac", "-c:s", "copy",
     ]
     if bitrate:
         cmd += ["-b:a", "%dk" % bitrate]
@@ -3464,6 +3507,31 @@ def _reencode_cut_audio_to_aac(cut_path, bitrate, cancel_cb=None):
     if os.path.exists(tmp):
         os.remove(tmp)
     return False
+
+
+# Subtitle codecs a transport stream can carry.  Everything else - a rip's
+# PGS, SubRip or ASS - has nowhere to live in a .ts.
+TS_SUBTITLE_CODECS = ("dvb_subtitle", "dvb_teletext")
+
+
+def _subtitle_codecs(path):
+    """Every subtitle codec in `path`, in stream order."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+            capture_output=True, text=True).stdout
+    except Exception:
+        logger.debug("Could not read %s's subtitle streams", path,
+                     exc_info=True)
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _ts_hostile_subtitles(path):
+    """Subtitle codecs in `path` that a transport stream cannot hold."""
+    return [c for c in _subtitle_codecs(path)
+            if c not in TS_SUBTITLE_CODECS]
 
 
 def _unwritable_audio_streams(path):
@@ -3891,11 +3959,21 @@ def _finalise_ts_audio_meta(path, ad_source=None, progress_cb=None):
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not os.path.exists(tmp) or \
             os.path.getsize(tmp) == 0:
-        tail = (res.stderr or "").strip().splitlines()
+        # Log SEVERAL lines of ffmpeg's output, not just the last one.
+        #
+        # ffmpeg's final line is usually the generic summary - "Error opening
+        # output files: Invalid argument" - while the line that says WHICH
+        # argument sits above it.  Logging only the last one produced exactly
+        # that: a real failure on one scene of a three-scene join, rc=234,
+        # and nothing to act on.  Five lines is enough for the cause and
+        # short enough not to bury the log.
+        tail = [ln for ln in (res.stderr or "").strip().splitlines() if ln.strip()]
         logger.warning(
-            "Audio-metadata finalise failed (rc=%s); keeping the file as cut. "
-            "ffmpeg: %s", res.returncode, tail[-1] if tail else "(no output)",
+            "Audio-metadata finalise failed (rc=%s); keeping the file as cut.",
+            res.returncode,
         )
+        for ln in (tail[-5:] if tail else ["(no output from ffmpeg)"]):
+            logger.warning("  ffmpeg: %s", ln)
         _safe_remove(tmp)
         return False
     os.replace(tmp, path)
@@ -3990,6 +4068,20 @@ def export_ranges(
 
     fps = frame_index.fps or 25.0
 
+    clock_jumps = _source_clock_jumps(source)
+    for split, amount in clock_jumps:
+        try:
+            at_frame = frame_index.index_of_seconds(split)
+        except Exception:
+            at_frame = -1
+        logger.info(
+            "Source timestamps jump forward %.3fs near frame %d (%s); the "
+            "gap is closed in the output, and times below are shown with "
+            "it removed.",
+            amount, at_frame,
+            _fmt_tc(at_frame / fps, fps) if at_frame >= 0 else "?",
+        )
+
     logger.info(
         "Export start: %s -> %s | %d scene(s), format=%s, fps=%.3f, "
         "audio tracks=%d",
@@ -4013,9 +4105,13 @@ def export_ranges(
     for i, ((a, b), (t0, t1)) in enumerate(
             zip(keep_ranges, segments), start=1
     ):
+        # With any clock leap before each time taken out, so a recording whose
+        # timestamps jump reads as it plays rather than hours out.
+        t0 = float(t0) - _jump_between(clock_jumps, float("-inf"), float(t0))
+        t1 = float(t1) - _jump_between(clock_jumps, float("-inf"), float(t1))
         logger.info(
             "  scene %d: %s -> %s  (frames %d-%d, %d frames)",
-            i, _fmt_tc(float(t0), fps), _fmt_tc(float(t1), fps),
+            i, _fmt_tc(t0, fps), _fmt_tc(t1, fps),
             a, b, b - a + 1,
         )
 
@@ -4029,14 +4125,15 @@ def export_ranges(
     def _segment_duration(a, b):
         try:
             # Real span of frames a..b inclusive: from a's timestamp to the
-            # timestamp of the frame after b (its true end).
+            # timestamp of the frame after b (its true end).  A leap in the
+            # source clock inside the span is not playing time, and left in
+            # it put every later chapter mark hours out.
+            start_s = frame_index.seconds_of(a)
             if b + 1 < frame_index.frame_count:
-                return frame_index.seconds_of(b + 1) - frame_index.seconds_of(a)
-            return (
-                frame_index.seconds_of(b)
-                - frame_index.seconds_of(a)
-                + (1.0 / fps)
-            )
+                end_s = frame_index.seconds_of(b + 1)
+            else:
+                end_s = frame_index.seconds_of(b) + (1.0 / fps)
+            return end_s - start_s - _jump_between(clock_jumps, start_s, end_s)
         except Exception:
             return (b - a + 1) / fps
 
@@ -4047,7 +4144,7 @@ def export_ranges(
     # worth saying: a mark placed in an advert quietly vanishing looks like a
     # fault otherwise.
     chapter_marks = _marks_in_output(
-        markers, keep_ranges, frame_index, segment_durations
+        markers, keep_ranges, frame_index, segment_durations, clock_jumps
     )
 
     if markers:
@@ -4089,7 +4186,27 @@ def export_ranges(
     want_mkv = out_format == "mkv"
     want_mp4 = out_format == "mp4"
     needs_temp_ts = want_mkv or want_mp4
-    cut_target = out_path + ".tmp.ts" if needs_temp_ts else out_path
+
+    # A cut for .mkv or .mp4 is written to a transport stream first, and a
+    # transport stream can carry only DVB subtitles.  A recording off the air
+    # is fine; anything from a disc is not, and its subtitles used to vanish
+    # in the intermediate with nothing said about it.  Matroska holds them
+    # all, so where the source carries subtitles a .ts cannot, an .mkv output
+    # is cut to an .mkv instead.  A broadcast recording takes exactly the
+    # path it always did.
+    # Worked out for every format, not just the ones with an intermediate: a
+    # .ts output cannot hold a disc's subtitles either, and that is worth
+    # saying rather than dropping them quietly.
+    foreign_subs = _ts_hostile_subtitles(source_path)
+    temp_ext = ".tmp.ts"
+    if foreign_subs and want_mkv:
+        temp_ext = ".tmp.mkv"
+        logger.info(
+            "Cutting to a Matroska intermediate: the recording's %s "
+            "subtitle(s) cannot be carried through a transport stream.",
+            ", ".join(sorted(set(foreign_subs))),
+        )
+    cut_target = out_path + temp_ext if needs_temp_ts else out_path
 
     start_time = time.perf_counter()
 
@@ -4386,6 +4503,25 @@ def export_ranges(
         errors = []   # (label, full) - serious; shown at the top of the dialog
         notes = []    # (label, full) - informational; shown as "* ..." notes
 
+        # Subtitles the chosen format cannot hold.  An .mkv takes them all
+        # (the cut is routed through a Matroska intermediate above); .mp4 and
+        # .ts cannot carry a disc's PGS or a file's SubRip, and used to drop
+        # them without a word.  Say so instead.
+        if foreign_subs and not want_mkv:
+            kinds = ", ".join(sorted(set(foreign_subs)))
+            plural = "s" if len(foreign_subs) > 1 else ""
+            notes.append((
+                "%d subtitle track%s not carried over"
+                % (len(foreign_subs), plural),
+                "The recording carries %s subtitle%s, which a %s file has no "
+                "place for. Export to .mkv instead and they are kept."
+                % (kinds, plural, os.path.splitext(out_path)[1] or out_format),
+            ))
+            logger.warning(
+                "%s cannot carry this recording's %s subtitle(s); they are "
+                "not in the output.", out_format.upper(), kinds,
+            )
+
         audio_repackaged = False
         if want_mkv:
             audio_repackaged = _write_mkv_chapters(
@@ -4462,13 +4598,15 @@ def export_ranges(
         success = True
 
     finally:
-        if needs_temp_ts and os.path.exists(cut_target):
+        if needs_temp_ts and cut_target != out_path and \
+                os.path.exists(cut_target):
             os.remove(cut_target)
         _safe_remove(aspect_source)
         if not success:
             # Aborted or failed part-way: don't leave a partial final file (or
             # an mp4 ".part") sitting on disk.
-            for p in (out_path, out_path + ".part", out_path + ".tmp.ts"):
+            for p in (out_path, out_path + ".part", out_path + ".tmp.ts",
+                      out_path + ".tmp.mkv"):
                 try:
                     if os.path.exists(p):
                         os.remove(p)

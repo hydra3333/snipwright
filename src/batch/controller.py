@@ -89,6 +89,13 @@ class BatchController(QObject):
         # Adopted exports whose row should disappear once the worker confirms
         # it has stopped, rather than the instant we ask it to.
         self._remove_when_cancelled = set()
+        # Every job id this instance has ever held - loaded at startup or added
+        # since.  save_queue() uses it to tell a job another copy of Snipwright
+        # added (leave it alone) from one this copy removed (keep it removed).
+        self._known_ids = set()
+        # How many foreign jobs the last save kept, so the message is logged
+        # when that number changes rather than on every single save.
+        self._last_foreign_count = 0
         self._load_queue()
 
     # ------------------------------------------------------------------ #
@@ -160,6 +167,9 @@ class BatchController(QObject):
                 entries = []
         for data in entries:
             self.jobs.append(BatchJob.from_dict(data))
+        # Everything we have just loaded counts as known, so a job that is
+        # later removed here is not treated as another instance's and put back.
+        self._known_ids = {j.id for j in self.jobs}
         # Drop entries whose files are gone - but only finished ones.  A DONE
         # job is just a record; if its source or output has since been deleted
         # there's nothing to keep.  A QUEUED job is left alone even if its file
@@ -192,19 +202,127 @@ class BatchController(QObject):
         return bool(ref and os.path.exists(ref))
 
     def save_queue(self):
-        from config.loader import save_sidecar
-        save_sidecar("queue.json", [j.to_dict() for j in self.jobs])
+        """Write the queue, keeping jobs another instance may have added.
+
+        The queue used to be written as a straight dump of `self.jobs`, which
+        is loaded once at startup.  Two copies of Snipwright therefore each
+        held their own snapshot and whichever saved last erased the other's
+        additions - silently, with no error and nothing in the log.  The writes
+        themselves are atomic, so nothing was ever corrupted; the loss happened
+        in the gap between reading at startup and writing minutes later.
+
+        So re-read immediately before writing and merge, which is the pattern
+        the logo store already uses (`load_store` -> `store_set` -> `save_store`
+        back to back in chalkline.py).
+
+        The distinction that makes this work is between a job we have never
+        seen - another instance added it, so leave it alone - and one we HAD
+        and no longer have, which this instance deliberately removed and must
+        not resurrect.  `_known_ids` is what separates them, and it is why a
+        job needs a stable id at all: every other field changes while a job
+        sits in the queue.
+
+        Single-instance operation is unaffected: nothing else is writing, so
+        the merge finds only our own jobs and the result is what a plain dump
+        would have produced.
+        """
+        from config.loader import load_sidecar, save_sidecar
+
+        mine = [j.to_dict() for j in self.jobs]
+        mine_ids = {d["id"] for d in mine}
+
+        try:
+            on_disk = load_sidecar("queue.json", default=None)
+        except Exception:
+            on_disk = None
+        if not isinstance(on_disk, list):
+            # Nothing readable to merge with - our list is the whole truth.
+            save_sidecar("queue.json", mine)
+            self._known_ids |= mine_ids
+            return
+
+        foreign = []
+        for data in on_disk:
+            if not isinstance(data, dict):
+                continue
+            jid = data.get("id")
+            if jid and jid in mine_ids:
+                continue          # ours, and ours is the newer copy
+            if jid and jid in self._known_ids:
+                continue          # we had it and removed it - stay removed
+            if not jid:
+                # Written by a version before ids existed.  Our own jobs came
+                # from this same file at startup and were given ids on load,
+                # so an id-less entry here is one of ours seen in its old
+                # form - keeping it would duplicate the job.  Dropped, and the
+                # copy in `mine` carries it forward with its new id.
+                continue
+            foreign.append(data)
+
+        if foreign and len(foreign) != self._last_foreign_count:
+            # Only when the number changes. Every queue edit saves, so logging
+            # unconditionally produced three identical lines inside one second
+            # during testing, which buries anything worth reading.
+            log.info("Batch queue: kept %d job(s) added by another copy of "
+                     "Snipwright.", len(foreign))
+        self._last_foreign_count = len(foreign)
+
+        save_sidecar("queue.json", foreign + mine)
+        # ACCUMULATE our own ids, and never record a foreign one.
+        #
+        # Both halves matter and both were got wrong first time. Replacing the
+        # set rather than adding to it forgets the jobs this instance has
+        # deleted, so the next save finds them still on disk, thinks another
+        # instance added them, and puts them back. Recording a foreign id
+        # claims someone else's job as ours, so the save after that treats it
+        # as one we removed and deletes it - which is the very thing this
+        # method exists to prevent.
+        self._known_ids |= mine_ids
 
     # ------------------------------------------------------------------ #
     # Staging files
     # ------------------------------------------------------------------ #
 
     def _staged_in_use(self):
-        """Every staging file the jobs still in the queue refer to."""
-        return {
+        """Every staging file ANY instance's queue still refers to.
+
+        Read from disk as well as from `self.jobs`, because this decides what
+        gets deleted and one instance's queue is not the whole queue.
+
+        This had the same fault `save_queue()` used to have, and it showed up
+        the same way: a job removed in one window had its staged project
+        deleted, while the other window still held that job and later ran it
+        against a file that was gone.  `read_source_filename()` returns nothing
+        for a missing file, so it surfaced as "The project file has no source
+        recording recorded" - which reads like a corrupt project rather than a
+        deleted one.
+
+        `sweep_staging()` uses this too, and there the stakes are higher: it
+        deletes anything no job claims, so an instance starting up with a
+        partial view could remove staged projects belonging to jobs another
+        instance is about to run, with nobody having touched the queue at all.
+
+        Falls back to `self.jobs` alone if the file cannot be read - which
+        keeps FEWER files in use and so deletes more, but a queue.json that
+        will not parse is a bigger problem than a stale staging file.
+        """
+        paths = {
             norm_path(j.vprj_path) for j in self.jobs
             if j.vprj_path and is_staged(j.vprj_path)
         }
+        try:
+            from config.loader import load_sidecar
+            on_disk = load_sidecar("queue.json", default=None)
+        except Exception:
+            on_disk = None
+        if isinstance(on_disk, list):
+            for data in on_disk:
+                if not isinstance(data, dict):
+                    continue
+                p = data.get("vprj_path")
+                if p and is_staged(p):
+                    paths.add(norm_path(p))
+        return paths
 
     def _discard_staged(self, paths):
         """Delete the staging projects among `paths` that nothing still needs.
@@ -765,9 +883,81 @@ class BatchController(QObject):
             self.save_queue()
             self.jobs_changed.emit()
 
+    def refresh_from_disk(self):
+        """Take in queue changes another instance has made since we loaded.
+
+        Adds jobs this instance has never seen, and drops ones it knew about
+        that have since gone from the file - the same `_known_ids` reasoning
+        `save_queue()` uses, read in the other direction.
+
+        Two things are deliberately left alone:
+
+        - Jobs this instance is running or has adopted from the editor. Their
+          state lives in a worker here, not on disk, and the copy on disk is
+          by definition the stale one.
+        - Anything at all if a batch is in flight. Changing the list the runner
+          is working through is not worth the risk for a refresh; it is called
+          before `start()` and when the Batch Manager is opened, which covers
+          the cases that matter.
+
+        Returns True if anything changed, so a caller can refresh its view.
+        """
+        if self.runner is not None:
+            return False
+        try:
+            from config.loader import load_sidecar
+            on_disk = load_sidecar("queue.json", default=None)
+        except Exception:
+            on_disk = None
+        if not isinstance(on_disk, list):
+            return False
+
+        disk_by_id = {}
+        for data in on_disk:
+            if isinstance(data, dict) and data.get("id"):
+                disk_by_id[data["id"]] = data
+
+        keep, changed = [], False
+        for job in self.jobs:
+            if job.external or job.status == RUNNING:
+                keep.append(job)          # ours, in flight - disk is stale
+                continue
+            if job.id in disk_by_id or job.id not in self._known_ids:
+                keep.append(job)
+                continue
+            # We knew it and the file no longer has it: removed elsewhere.
+            changed = True
+        added = 0
+        have = {j.id for j in keep}
+        for jid, data in disk_by_id.items():
+            if jid in have:
+                continue
+            keep.append(BatchJob.from_dict(data))
+            added += 1
+        if added:
+            changed = True
+        if changed:
+            self.jobs = keep
+            self._known_ids |= {j.id for j in self.jobs}
+            log.info("Batch queue refreshed from disk: %d job(s) now queued.",
+                     len(self.jobs))
+        return changed
+
     def start(self):
         if self.runner is not None:
             return
+        # Take in what another instance has done before running anything.
+        #
+        # This window's list is read once at startup, so a job removed or
+        # finished in another copy of Snipwright is still sitting here as
+        # queued - and running it means working from a project that has since
+        # been discarded.  That is exactly what happened during testing: a job
+        # removed in one window failed in the other with "The project file has
+        # no source recording recorded", because the staged project had gone.
+        #
+        # Starting a batch is the moment it matters most and the cheapest
+        # place to do it: nothing is running yet, so nothing can be disturbed.
+        self.refresh_from_disk()
         self._eta.reset()
         self.runner = BatchRunner(
             self.jobs, self.out_folder, self.modifier, self.config, self

@@ -679,6 +679,13 @@ def process_recording(source, comskip_binary, comskip_ini, output_dir,
                     info.get("anchor_brackets", 0),
                     info.get("coincidence_brackets", 0),
                 )
+                if info.get("mask_unfit") is not None:
+                    log.info(
+                        "  Chalkline: remembered %spx %s logo for %s not "
+                        "used - it matches only %.1f%% of this recording",
+                        info.get("mask_pixels"), info.get("mask_kind"),
+                        info.get("channel"), 100 * info["mask_unfit"],
+                    )
                 if info.get("mask_brackets"):
                     log.info(
                         "  Chalkline: remembered %spx %s logo for %s "
