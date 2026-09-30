@@ -390,7 +390,7 @@ class BatchController(QObject):
             return 0
 
         for name in names:
-            if not name.lower().endswith(".vprj"):
+            if not name.lower().endswith((".vprj", ".swproj", ".vjr")):
                 continue
             path = os.path.join(directory, name)
             if norm_path(path) in keep:
@@ -439,7 +439,7 @@ class BatchController(QObject):
         checking a folderful of projects doesn't re-read the whole queue for
         each one.
         """
-        from project.vprj import read_source_filename
+        from project.formats import read_source_filename
 
         sources = set()
         for job in self.jobs:
@@ -465,7 +465,7 @@ class BatchController(QObject):
         if not source_path:
             return 0
 
-        from project.vprj import read_source_filename
+        from project.formats import read_source_filename
 
         target = norm_path(source_path)
         count = 0

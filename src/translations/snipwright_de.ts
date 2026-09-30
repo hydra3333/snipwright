@@ -237,6 +237,11 @@
         <source>Working</source>
         <translation>In Arbeit</translation>
     </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="55"/>
+        <source>Joining</source>
+        <translation>Zusammenfügen</translation>
+    </message>
 </context>
 <context>
     <name>BatchManagerDialog</name>
@@ -624,6 +629,11 @@ In der Spalte „Status“ steht, was bei den fehlgeschlagenen Aufträgen schief
         <source>Processing %(index)d of %(total)d: %(name)s</source>
         <translation>%(index)d von %(total)d wird verarbeitet: %(name)s</translation>
     </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="743"/>
+        <source>This is a joined video queued from the Joiner. To change it, remove it from the queue, edit the Joiner list and queue it again.</source>
+        <translation>Dies ist ein aus dem Joiner eingereihtes, zusammengefügtes Video. Um es zu ändern, entferne es aus der Warteschlange, bearbeite die Joiner-Liste und reihe sie erneut ein.</translation>
+    </message>
 </context>
 <context>
     <name>Comskip</name>
@@ -761,6 +771,61 @@ In der Spalte „Status“ steht, was bei den fehlgeschlagenen Aufträgen schief
         <source>OK</source>
         <translation>OK</translation>
     </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video length:</source>
+        <translation>Videolänge:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video size:</source>
+        <translation>Videogröße:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Output scenes:</source>
+        <translation>Ausgegebene Szenen:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video output frames:</source>
+        <translation>Ausgegebene Videobilder:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Audio output frames:</source>
+        <translation>Ausgegebene Audio-Frames:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Audio tracks:</source>
+        <translation>Audiospuren:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Subtitles:</source>
+        <translation>Untertitel:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Processing time:</source>
+        <translation>Verarbeitungszeit:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Processed frames/sec:</source>
+        <translation>Verarbeitete Bilder/s:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video bitrate:</source>
+        <translation>Videobitrate:</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>None</source>
+        <translation>Keine</translation>
+    </message>
 </context>
 <context>
     <name>ExportProgressDialog</name>
@@ -819,6 +884,11 @@ In der Spalte „Status“ steht, was bei den fehlgeschlagenen Aufträgen schief
         <location filename="../ui/export_dialogs.py" line="219"/>
         <source>Estimated time remaining: %s</source>
         <translation>Geschätzte Restzeit: %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="195"/>
+        <source>Joining…</source>
+        <translation>Zusammenfügen…</translation>
     </message>
 </context>
 <context>
@@ -895,6 +965,26 @@ In der Spalte „Status“ steht, was bei den fehlgeschlagenen Aufträgen schief
         <location filename="../ui/settings_pages/files.py" line="62"/>
         <source>Project files:</source>
         <translation>Projektdateien:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="82"/>
+        <source>Project format:</source>
+        <translation>Projektformat:</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="85"/>
+        <source>Snipwright (.swproj)</source>
+        <translation>Snipwright (.swproj)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="87"/>
+        <source>VideoReDo (.vprj)</source>
+        <translation>VideoReDo (.vprj)</translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="95"/>
+        <source>The format Save Project writes. A Snipwright project records which recording it belongs to and places its cuts on the exact frames you chose, but VideoReDo cannot open it - choose VideoReDo if you move projects between the two. Either kind opens in Snipwright, and Save Project As offers both.</source>
+        <translation>Das Format, das „Projekt speichern“ schreibt. Ein Snipwright-Projekt vermerkt, zu welcher Aufnahme es gehört, und setzt seine Schnitte genau auf die gewählten Bilder, lässt sich aber nicht in VideoReDo öffnen – wähle VideoReDo, wenn du Projekte zwischen beiden austauschst. Beide Arten lassen sich in Snipwright öffnen, und „Projekt speichern unter“ bietet beide an.</translation>
     </message>
 </context>
 <context>
@@ -1722,6 +1812,16 @@ Ja = anhängen,  Nein = aktuelle Liste ersetzen.</translation>
 
 %s</translation>
     </message>
+    <message>
+        <location filename="../ui/joiner_dialog.py" line="306"/>
+        <source>Queue to batch</source>
+        <translation>Zur Stapelverarbeitung</translation>
+    </message>
+    <message>
+        <location filename="../ui/joiner_dialog.py" line="308"/>
+        <source>Add this list to the batch queue, to be joined later with the Batch Manager's profile and output folder.</source>
+        <translation>Diese Liste in die Warteschlange der Stapelverarbeitung stellen, um sie später mit dem Profil und Ausgabeordner des Batch-Managers zusammenzufügen.</translation>
+    </message>
 </context>
 <context>
     <name>LoggingPage</name>
@@ -2282,11 +2382,6 @@ Fortfahren?</translation>
         <translation>Zusammengefügtes Video erstellen</translation>
     </message>
     <message>
-        <location filename="../main.py" line="1761"/>
-        <source>Cancelling…</source>
-        <translation>Wird abgebrochen…</translation>
-    </message>
-    <message>
         <location filename="../main.py" line="2593"/>
         <source>Learning %s&apos;s logo…</source>
         <translation>Logo von %s wird gelernt…</translation>
@@ -2349,11 +2444,6 @@ Quit anyway?</source>
         <translation>Im Hintergrund wird noch ein Export geschrieben. Beim Beenden wird er abgebrochen und die unfertige Datei verworfen.
 
 Trotzdem beenden?</translation>
-    </message>
-    <message>
-        <location filename="../main.py" line="1732"/>
-        <source>Preparing…</source>
-        <translation>Wird vorbereitet…</translation>
     </message>
     <message>
         <location filename="../main.py" line="1732"/>
@@ -3026,6 +3116,30 @@ Fortfahren?</translation>
         <location filename="../main.py" line="5080"/>
         <source>Could not open video: %s</source>
         <translation>Video konnte nicht geöffnet werden: %s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1052"/>
+        <source>Queue Joiner List to Batch</source>
+        <translation>Joiner-Liste zur Stapelverarbeitung</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1721"/>
+        <source>The joiner list could not be queued:
+
+%s</source>
+        <translation>Die Joiner-Liste konnte nicht eingereiht werden:
+
+%s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1814"/>
+        <source>Creating %s</source>
+        <translation>%s wird erstellt</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1890"/>
+        <source>Send to Batch</source>
+        <translation>An Stapel senden</translation>
     </message>
 </context>
 <context>
@@ -3923,6 +4037,56 @@ Trotzdem verwenden?</translation>
         <location filename="../utils/program_info.py" line="434"/>
         <source>Sample size</source>
         <translation>Abtastgröße</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVB subtitles</source>
+        <translation>DVB-Untertitel</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVB teletext</source>
+        <translation>DVB-Videotext</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>PGS (Blu-ray)</source>
+        <translation>PGS (Blu-ray)</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVD subtitles</source>
+        <translation>DVD-Untertitel</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>SubRip text</source>
+        <translation>SubRip-Text</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>ASS text</source>
+        <translation>ASS-Text</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>MP4 text</source>
+        <translation>MP4-Text</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Subtitle Stream: %d</source>
+        <translation>Untertitelspur: %d</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Type</source>
+        <translation>Typ</translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Page</source>
+        <translation>Seite</translation>
     </message>
 </context>
 <context>

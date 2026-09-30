@@ -1,4 +1,4 @@
-"""The watcher engine: find new recordings, detect the adverts, write a .vprj.
+"""The watcher engine: find new recordings, detect the adverts, write a project.
 
 Deliberately free of any Qt or UI code so it can be unit-tested headlessly and
 reused.  A standalone tray app drives it on a timer; it could equally be driven
@@ -7,7 +7,8 @@ lives in chalkline.py rather than in chalkline_worker.py, which imports Qt.
 
 For each recording it finds that it hasn't already handled and that has
 finished recording, it runs the chosen detector - Chalkline or Comskip - to
-find the commercials and writes a .vprj of those cuts into the output folder.
+find the commercials and writes a project of those cuts into the output folder
+- a .swproj or a .vprj, whichever Settings > Files & folders chooses.
 Which one runs is the editor's setting, not a separate one here: a recording
 should not be detected one way unattended and another way by hand.  It never
 edits or exports the recording - the produced project is a starting point the
@@ -26,7 +27,7 @@ import tempfile
 import time
 
 from project.edl import parse_edl_cuts
-from project.vprj import save_vprj_from_cuts
+from project.formats import save_project_from_cuts
 from repair.chalkline import run_chalkline, ChalklineError
 from repair.comskip import run_comskip, ComskipError, pick_comskip_ini
 
@@ -633,9 +634,11 @@ def process_recording(source, comskip_binary, comskip_ini, output_dir,
                       progress_cb=None, cancel_cb=None,
                       save_when_empty=True,
                       detector=DEFAULT_DETECTOR,
+                      project_format="vprj",
                       _run_comskip=run_comskip,
                       _run_chalkline=run_chalkline):
-    """Detect the adverts in one recording and write a .vprj of them.
+    """Detect the adverts in one recording and write a project of them -
+    a .swproj or a .vprj, as `project_format` says.
 
     ``detector`` chooses between Chalkline and Comskip.  The Comskip
     arguments are kept whichever is chosen - they are simply unused on the
@@ -710,14 +713,23 @@ def process_recording(source, comskip_binary, comskip_ini, output_dir,
 
         os.makedirs(output_dir, exist_ok=True)
         base = os.path.splitext(os.path.basename(source))[0]
-        vprj_path = os.path.join(output_dir, base + ".vprj")
+        ext = ".swproj" if project_format == "swproj" else ".vprj"
+        vprj_path = os.path.join(output_dir, base + ext)
 
-        # An empty cut list is valid: save_vprj_from_cuts writes a project that
-        # keeps the whole recording (no cuts), which is exactly what we want
-        # when the detector found no commercials.
-        save_vprj_from_cuts(
+        # An empty cut list is valid: this writes a project that keeps the
+        # whole recording (no cuts), which is exactly what we want when the
+        # detector found no commercials.  A .swproj also records that the
+        # detector found these cuts and nobody has reviewed them yet.
+        try:
+            from version import VERSION_STRING as made_with
+        except Exception:
+            made_with = ""
+        save_project_from_cuts(
             vprj_path, source, cuts,
             duration_seconds=probe_duration(source),
+            made_by=detector if detector in ("chalkline", "comskip")
+            else "unknown",
+            made_with=made_with,
         )
         return ProcessResult(source, vprj_path=vprj_path, cut_count=len(cuts))
     finally:
@@ -877,6 +889,7 @@ def scan_once(cfg, processed, comskip_binary=None, comskip_ini=None,
             cancel_cb=cancel_cb,
             save_when_empty=cfg.save_when_no_adverts,
             detector=detector,
+            project_format=cfg.project_format,
         )
 
         if cancel_cb() and result.error:

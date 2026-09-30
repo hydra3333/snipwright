@@ -208,6 +208,7 @@ class JoinerDialog(QDialog):
         self._joiner_dir = joiner_dir
         self.entry_to_edit = None             # set by "Edit selection"
         self.create_requested = False         # set by "Create video…"
+        self.queue_requested = False          # set by "Queue to batch"
 
         outer = QVBoxLayout(self)
 
@@ -302,6 +303,11 @@ class JoinerDialog(QDialog):
         self.btn_clear_all.clicked.connect(self._clear_all)
         self.btn_create = QPushButton(self.tr("Create video from joiner list…"))
         self.btn_create.clicked.connect(self._create_video)
+        self.btn_queue = QPushButton(self.tr("Queue to batch"))
+        self.btn_queue.setToolTip(self.tr(
+            "Add this list to the batch queue, to be joined later with the "
+            "Batch Manager's profile and output folder."))
+        self.btn_queue.clicked.connect(self._queue_video)
         self.btn_ok = QPushButton(self.tr("OK"))
         self.btn_ok.setDefault(True)
         self.btn_ok.clicked.connect(self.accept)
@@ -309,6 +315,7 @@ class JoinerDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         bottom.addWidget(self.btn_clear_all)
         bottom.addWidget(self.btn_create)
+        bottom.addWidget(self.btn_queue)
         bottom.addStretch(1)
         bottom.addWidget(self.btn_ok)
         bottom.addWidget(self.btn_cancel)
@@ -474,6 +481,16 @@ class JoinerDialog(QDialog):
                 self, self.tr("Joiner"), self.tr("The joiner list is empty."))
             return
         self.create_requested = True
+        self.accept()
+
+    def _queue_video(self):
+        """Hand the list back to the caller to queue for the batch - the
+        same way _create_video does, so the edited list is adopted first."""
+        if not self._list.entries:
+            QMessageBox.information(
+                self, self.tr("Joiner"), self.tr("The joiner list is empty."))
+            return
+        self.queue_requested = True
         self.accept()
 
     def _clear_all(self):

@@ -1039,16 +1039,27 @@ def _run_smartcut(source_path, out_path, segments, n_audio, keep_ranges, fps,
                 n_written, "" if n_written == 1 else "s",
             )
             return n_written
-    except Exception:
+    except Exception as exc:
         # Warning rather than exception(), which logs at ERROR.  A retry
         # follows immediately and usually succeeds, so this is a recoverable
-        # step in a working export, not a failure - and a full ERROR
-        # traceback in the log sends the reader hunting for a fault that the
-        # next two lines have already dealt with.  The traceback is still
-        # recorded in full: the commonest cause is a parameterless audio
-        # track that avformat_write_header rejects with EINVAL, and knowing
-        # that is what makes the completion message correct.
-        logger.warning("smartcut: first attempt raised", exc_info=True)
+        # step in a working export, not a failure.
+        #
+        # The commonest cause is known: a parameterless audio track (an
+        # audio-description stream declaring no channels or sample rate)
+        # that avformat_write_header rejects with EINVAL.  That gets one
+        # plain line - a full traceback for it read as a crash to the user
+        # (2026-09-25, a join including an ITV2 recording) when the next
+        # line had already dealt with it.  Anything else keeps the full
+        # traceback, because an unexplained first failure is exactly what
+        # it is for.
+        message = str(exc)
+        if "returned 22" in message or "Invalid argument" in message:
+            logger.warning(
+                "smartcut: the file header could not be written with every "
+                "audio track (%s) - usually an audio track that declares no "
+                "channels or sample rate. Retrying without it.", message)
+        else:
+            logger.warning("smartcut: first attempt raised", exc_info=True)
 
     # Already down to the primary track only - nothing more to drop.
     if n_written <= 1:
@@ -1257,6 +1268,18 @@ def _mkvmerge_video_track_id(exe, ts_path):
     except Exception:
         pass
     return 0
+
+
+def _mkvmerge_subtitle_track_ids(exe, path):
+    """Every subtitle track's id as mkvmerge sees it, or [] on any failure."""
+    try:
+        data = json.loads(subprocess.run(
+            [exe, *MKVMERGE_PROBE, "-J", path], capture_output=True, text=True,
+        ).stdout)
+        return [t.get("id") for t in data.get("tracks", [])
+                if t.get("type") == "subtitles" and t.get("id") is not None]
+    except Exception:
+        return []
 
 
 def _relax_ts_audio_via_mkvmerge(ts_path, exe, cancel_cb=None):
@@ -1814,6 +1837,16 @@ def _write_mkv_chapters_mkvmerge(ts_path, mkv_path, segment_durations, exe,
                     "Marking MKV track %d as visual impaired (broadcast "
                     "audio description).", tid,
                 )
+        # Subtitles must not be a DEFAULT track.  A transport stream carries no
+        # default-track information, so mkvmerge marks every track default -
+        # subtitles included - and in Matroska that tells a player to show
+        # them.  Every broadcast recording exported to .mkv opened with its
+        # subtitles on, and the user had to switch them off each time.  This
+        # went unnoticed while subtitles were being dropped altogether (fixed
+        # in 2.7.25 and 2.7.28).  `--default-track` is the older spelling of
+        # `--default-track-flag`, accepted by every MKVToolNix version.
+        for tid in _mkvmerge_subtitle_track_ids(exe, ts_path):
+            cmd += ["--default-track", "%d:0" % tid]
         cmd.append(ts_path)
         result = _run_cancellable(cmd, cancel_cb=cancel_cb)
         # mkvmerge: 0 = OK, 1 = OK with warnings, 2 = error.
@@ -2098,6 +2131,10 @@ def _write_mkv_chapters_ffmpeg(ts_path, mkv_path, segment_durations,
             # Container display aspect, set without re-encoding the video.
             cmd += ["-aspect", dar]
             logger.info("Setting %s display aspect on the MKV (ffmpeg).", aspect)
+        # Subtitles are not a default track - see the same step in
+        # _write_mkv_chapters_mkvmerge.  ffmpeg marks the first stream of each
+        # kind default unless told otherwise.
+        cmd += ["-disposition:s", "0"]
         cmd.append(mkv_path)
         if audio_reencode and progress_cb is not None and total_seconds > 0:
             # A whole-film audio re-encode takes minutes.  Report real
@@ -5044,6 +5081,8 @@ def export_ranges(
         "video_bitrate": video_bitrate,
         "audio_needs_repair": audio_needs_repair,
         "recode_failed": recode_failed,
+        # Read off the finished file, like the other figures: what was KEPT.
+        "subtitle_tracks": probe_subtitle_tracks(out_path),
     }
 
     # The completion figures, one per line (like the dialog) so the summary is
@@ -5065,6 +5104,50 @@ def export_ranges(
             notes=notes, errors=errors)))
 
     return stats
+
+
+def probe_subtitle_tracks(path):
+    """The subtitle tracks a finished file carries, as (codec, language)
+    pairs - [] for none - or None when the file cannot be read.
+
+    Probed ONCE, when an export or a join completes, and stored in its stats,
+    so the log's summary and the completion window report the same finding.
+    None is kept distinct from [] on purpose: "no subtitles" is a finding,
+    and a file that could not be read must not be reported as one.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_entries", "stream=codec_name:stream_tags=language",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return [(s.get("codec_name", ""), (s.get("tags") or {}).get("language", ""))
+            for s in data.get("streams", [])]
+
+
+def describe_subtitle_tracks(tracks, name_of=None):
+    """One line for a list of (codec, language) pairs: "DVB subtitles (eng)",
+    several joined with commas, or "None".
+
+    `name_of(codec)` gives a track's display name; the default is the plain
+    English one, for the log.  The completion window passes a translating
+    one, so both use the same wording from utils.program_info.
+    """
+    from utils.program_info import _SUBTITLE_TYPES
+    if name_of is None:
+        name_of = lambda codec: _SUBTITLE_TYPES.get(codec) or (codec or "?").upper()
+    if not tracks:
+        return "None"
+    return ", ".join("%s (%s)" % (name_of(c), lang) if lang else name_of(c)
+                     for c, lang in tracks)
 
 
 def format_completion_summary(label, stats, notes=(), errors=()):
@@ -5091,6 +5174,13 @@ def format_completion_summary(label, stats, notes=(), errors=()):
         "    Video frames    : %d" % (stats.get("video_frames") or 0),
         "    Audio frames    : %d" % (stats.get("audio_frames") or 0),
         "    Audio tracks    : %d" % (stats.get("audio_tracks") or 0),
+    ]
+    # Subtitles, as the completion window shows them - left out when the
+    # finished file could not be read, so "None" is only ever a finding.
+    if stats.get("subtitle_tracks") is not None:
+        lines.append("    Subtitles       : %s"
+                     % describe_subtitle_tracks(stats["subtitle_tracks"]))
+    lines += [
         "    Processing time : %.1fs" % (stats.get("processing_secs") or 0.0),
         "    Frames/sec      : %.0f" % (stats.get("fps") or 0.0),
         "    Video bitrate   : %.2f Mbps" % (

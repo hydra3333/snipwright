@@ -10,7 +10,7 @@ a scene counter, and an estimated time remaining.  It exposes Pause is omitted
 ExportCompleteDialog shows a VideoReDo-style stats table.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QT_TRANSLATE_NOOP, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -182,6 +182,20 @@ class ExportProgressDialog(QDialog):
     def update_progress(self, info):
         percent = info.get("percent", 0)
         phase = info.get("phase", "copy")
+
+        # A join reports its own line of text, time estimate included: it runs
+        # in stages (each scene, then a whole-file pass) and restarts the bar
+        # for each, which this dialog's estimator - timing one bar from start
+        # to finish - would misread.  So show the Joiner's own text instead.
+        if phase == "join":
+            self._phase = phase
+            if self._bar.maximum() == 0:
+                self._bar.setRange(0, 100)
+            self._bar.setValue(max(0, int(percent)))
+            self._phase_label.setText(info.get("label") or self.tr("Joining…"))
+            self._scene_label.setText("")
+            self._eta_label.setText("")
+            return
         scene = info.get("scene", 1)
         total_scenes = info.get("total_scenes", 1)
 
@@ -225,6 +239,37 @@ class ExportProgressDialog(QDialog):
             self._eta_label.setText(self.tr("Estimated time remaining: …"))
 
 
+def _subtitle_summary(stats):
+    """The subtitle tracks the finished file carries, as one line -
+    "DVB subtitles (eng)", several joined with commas - or "None".
+
+    Read from the OUTPUT, not the source, so it reports what was kept.  The
+    exporter and the joiner probe the finished file once and store the result
+    in stats["subtitle_tracks"], which the log's summary prints too - so the
+    window and the log cannot disagree.  Only the track names are translated
+    here.  Returns "" when the file could not be read, so the row is left out
+    rather than claiming "None".
+    """
+    from export.exporter import describe_subtitle_tracks, probe_subtitle_tracks
+    from utils.program_info import _SUBTITLE_TYPES
+
+    if "subtitle_tracks" in stats:
+        tracks = stats["subtitle_tracks"]
+    else:
+        tracks = probe_subtitle_tracks(stats.get("out_path", ""))
+    if tracks is None:
+        return ""
+    if not tracks:
+        return QCoreApplication.translate("ExportCompleteDialog", "None")
+
+    def name_of(codec):
+        kind = _SUBTITLE_TYPES.get(codec)
+        return (QCoreApplication.translate("ProgramInfo", kind) if kind
+                else (codec or "?").upper())
+
+    return describe_subtitle_tracks(tracks, name_of)
+
+
 class ExportCompleteDialog(QDialog):
 
     def __init__(self, stats, parent=None):
@@ -243,16 +288,34 @@ class ExportCompleteDialog(QDialog):
         out_path = self._out_path
         filename = out_path.rsplit("/", 1)[-1] if out_path else ""
 
+        # The labels are marked for translation here and translated as the
+        # table is built.  They used to be plain strings, so this one dialog
+        # stayed English in the German build - only its title was translated.
         rows = [
-            ("Video length:", _fmt_duration(stats.get("duration_secs", 0))),
-            ("Video size:", _fmt_size(stats.get("out_size", 0))),
-            ("Output scenes:", str(stats.get("scenes", 0))),
-            ("Video output frames:", f"{stats.get('video_frames', 0):,}"),
-            ("Audio output frames:", f"{stats.get('audio_frames', 0):,}"),
-            ("Audio tracks:", str(stats.get("audio_tracks", 0))),
-            ("Processing time:", _fmt_secs(stats.get("processing_secs", 0))),
-            ("Processed frames/sec:", f"{stats.get('fps', 0):.0f}"),
-            ("Video bitrate:", _fmt_bitrate(stats.get("video_bitrate", 0))),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Video length:"),
+             _fmt_duration(stats.get("duration_secs", 0))),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Video size:"),
+             _fmt_size(stats.get("out_size", 0))),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Output scenes:"),
+             str(stats.get("scenes", 0))),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Video output frames:"),
+             f"{stats.get('video_frames', 0):,}"),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Audio output frames:"),
+             f"{stats.get('audio_frames', 0):,}"),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Audio tracks:"),
+             str(stats.get("audio_tracks", 0))),
+        ]
+        subtitles = _subtitle_summary(stats)
+        if subtitles:
+            rows.append((QT_TRANSLATE_NOOP("ExportCompleteDialog",
+                                           "Subtitles:"), subtitles))
+        rows += [
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Processing time:"),
+             _fmt_secs(stats.get("processing_secs", 0))),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Processed frames/sec:"),
+             f"{stats.get('fps', 0):.0f}"),
+            (QT_TRANSLATE_NOOP("ExportCompleteDialog", "Video bitrate:"),
+             _fmt_bitrate(stats.get("video_bitrate", 0))),
         ]
 
         # Build alternating-row HTML table (VideoReDo-style).
@@ -262,7 +325,7 @@ class ExportCompleteDialog(QDialog):
             row_html.append(
                 f'<tr style="background:{bg};">'
                 f'<td style="padding:8px 18px; color:#9aa0a6; '
-                f'white-space:nowrap;">{_esc(label)}</td>'
+                f'white-space:nowrap;">{_esc(self.tr(label))}</td>'
                 f'<td style="padding:8px 18px; color:#e8eaed; '
                 f'font-weight:600;" align="right">{_esc(value)}</td>'
                 f'</tr>'

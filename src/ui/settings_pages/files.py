@@ -1,8 +1,15 @@
 """Files & folders page: opening behaviour and the working folders."""
 
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QLabel, QListWidget, QPushButton, QWidget, QHBoxLayout,
+    QCheckBox,
+    QComboBox,
     QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QWidget,
 )
 
 from ui.settings_pages import SettingsPage
@@ -65,6 +72,33 @@ class FilesPage(SettingsPage):
         )
         self.add(self._project_row)
 
+        # Which format Save Project writes. A .vprj can be opened in
+        # VideoReDo; a .swproj cannot, but records which recording it
+        # belongs to and places its cuts by exact frame. Chosen here rather
+        # than warned about on every save.
+        fmt_row = QWidget()
+        fl = QHBoxLayout(fmt_row)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.addWidget(QLabel(self.tr("Project format:")))
+        self._project_format = QComboBox()
+        self._project_format.addItem(
+            self.tr("Snipwright (.swproj)"), "swproj")
+        self._project_format.addItem(
+            self.tr("VideoReDo (.vprj)"), "vprj")
+        current = str(p.get("project_format", "vprj")).lower()
+        self._project_format.setCurrentIndex(
+            max(0, self._project_format.findData(current)))
+        fl.addWidget(self._project_format)
+        fl.addStretch(1)
+        self.add(fmt_row)
+        self.add(hint(
+            self.tr("The format Save Project writes. A Snipwright project "
+            "records which recording it belongs to and places its cuts on "
+            "the exact frames you chose, but VideoReDo cannot open it - "
+            "choose VideoReDo if you move projects between the two. Either "
+            "kind opens in Snipwright, and Save Project As offers both.")
+        ))
+
         self.add(_divider())
 
         self.add(QLabel(self.tr("Favourite folders")))
@@ -125,3 +159,4 @@ class FilesPage(SettingsPage):
         paths["export_folder"] = self._export_row.folder()
         paths["project_mode"] = self._project_row.mode()
         paths["project_folder"] = self._project_row.folder()
+        paths["project_format"] = self._project_format.currentData() or "vprj"

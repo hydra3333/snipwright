@@ -23,7 +23,8 @@ from batch.job import (
 from addons.output_profiles import resolve_profile
 from export.exporter import export_ranges, ExportError, ExportCancelled
 from media.frame_index import build_index_sync
-from project.vprj import read_source_filename, load_vprj
+# Either project format - Snipwright's own .swproj or a VideoReDo .vprj.
+from project.formats import read_source_filename, load_project
 from utils.winepath import resolve_source
 
 log = logging.getLogger("snipwright.batch")
@@ -67,6 +68,13 @@ def process_job(
     """
     taken = taken if taken is not None else set()
     cancel_cb = cancel_cb or (lambda: False)
+
+    # A Joiner list queued from the Joiner: several recordings, rendered and
+    # joined by the Joiner's own renderer rather than cut from one source.
+    from project.formats import is_queued_join
+    if is_queued_join(job.vprj_path):
+        return _process_join(job, out_folder, modifier, config, taken,
+                             progress_cb, cancel_cb)
 
     # --- locate the recording the project refers to ----------------------- #
     embedded = read_source_filename(job.vprj_path)
@@ -134,7 +142,7 @@ def _index_and_export(
 
     index = build_index_sync(export_source)
 
-    data = load_vprj(job.vprj_path, index)
+    data = load_project(job.vprj_path, index)
     keep_ranges = list(data.keep_ranges)
     # The project carries the user's chapter marks too.  Batch exports left
     # them behind while the Save Video dialog did not, so the same project
@@ -198,6 +206,74 @@ def _index_and_export(
                              if hasattr(profile, "effective_gop_seconds")
                              else None),
     )
+
+
+def _process_join(job, out_folder, modifier, config, taken,
+                  progress_cb, cancel_cb):
+    """Render a queued Joiner list through the Joiner's own renderer.
+
+    The same JoinerRenderWorker that Create Video uses does the work, so a
+    queued join produces the file Create Video would have. It is a QThread,
+    but its run() is plain subprocess work with no event loop of its own, so
+    it is called directly here, in the batch's thread, with its signals
+    connected directly: its progress becomes the batch's, and the batch's
+    Stop cancels it.
+    """
+    from PySide6.QtCore import Qt
+    from export.joiner_render import JoinerRenderWorker
+    from project.joiner import JoinerEntry, read_queued, queued_name_path
+
+    try:
+        entries, reencode_target = read_queued(job.vprj_path)
+    except (OSError, ValueError) as exc:
+        raise JobError(f"The queued join could not be read: {exc}")
+    if not entries:
+        raise JobError("The queued join has no scenes in it.")
+    missing = [e.source for e in entries
+               if e.kind != JoinerEntry.KIND_TITLE and not e.exists]
+    if missing:
+        raise JobError("Recordings in this join can't be found:\n"
+                       + "\n".join(missing[:8]))
+
+    name_path = queued_name_path(job.vprj_path)
+    job.source_path = name_path
+    profile = resolve_profile(config, job.profile_name)
+
+    dest = getattr(job, "fixed_dest", None)
+    if dest:
+        os.makedirs(os.path.dirname(dest) or out_folder, exist_ok=True)
+    else:
+        folder = getattr(job, "dest_folder", "") or out_folder
+        dest = build_dest_path(
+            folder, modifier, name_path,
+            container_to_fmt(profile.container), taken,
+        )
+    job.dest_path = dest
+    taken.add(dest)
+    os.makedirs(os.path.dirname(dest) or out_folder, exist_ok=True)
+
+    worker = JoinerRenderWorker(entries, dest, profile, reencode_target)
+    outcome = {}
+
+    def on_progress(percent, _label):
+        if cancel_cb():
+            worker.cancel()
+        if progress_cb:
+            progress_cb({"phase": "join", "percent": int(percent)})
+
+    direct = Qt.ConnectionType.DirectConnection
+    worker.progress.connect(on_progress, direct)
+    worker.finished_ok.connect(lambda path: outcome.update(ok=path), direct)
+    worker.failed.connect(lambda msg: outcome.update(error=msg), direct)
+
+    if cancel_cb():
+        raise JobError("Cancelled.")
+    worker.run()
+
+    if "ok" not in outcome:
+        _delete_quietly(dest)
+        raise JobError(outcome.get("error") or "The join did not finish.")
+    return dict(worker.stats or {})
 
 
 # Statuses the runner re-attempts when Start is pressed.  DONE is skipped

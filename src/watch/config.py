@@ -311,6 +311,24 @@ class WatchConfig:
             return "chalkline"
         return value if value in ("chalkline", "comskip") else "chalkline"
 
+    @property
+    def project_format(self):
+        """Which project format the Watcher writes: "swproj" or "vprj".
+
+        Read from the shared editor config (Settings > Files & folders), so a
+        project the Watcher writes is the same kind the editor saves. Anything
+        unreadable falls back to "vprj", the format every older installation
+        already uses.
+        """
+        try:
+            cfg = ensure_config()
+            value = str(
+                cfg.get("paths", {}).get("project_format", "vprj")
+            ).lower()
+        except Exception:
+            return "vprj"
+        return value if value in ("swproj", "vprj") else "vprj"
+
     def comskip_paths(self):
         """Return (binary, ini) from the editor's config, or ("", "")."""
         try:

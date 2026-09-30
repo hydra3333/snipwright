@@ -34,7 +34,7 @@ from batch.job import (
 )
 from addons.output_profiles import load_profiles, resolve_profile
 from batch.controller import norm_path
-from project.vprj import read_source_filename
+from project.formats import read_source_filename
 from utils.eta import format_seconds
 
 # Display labels for the job phases the runner reports.
@@ -52,6 +52,7 @@ _PHASE_TEXT = {
     "graft_audio": QT_TRANSLATE_NOOP("BatchManager", "Copying audio"),
     "finalise": QT_TRANSLATE_NOOP("BatchManager", "Finalising"),
     "done": QT_TRANSLATE_NOOP("BatchManager", "Finishing"),
+    "join": QT_TRANSLATE_NOOP("BatchManager", "Joining"),
 }
 
 _STATUS_TEXT = {
@@ -368,7 +369,10 @@ class BatchManagerDialog(QDialog):
             self,
             "Add Projects",
             self.controller.out_folder,
-            "Snipwright Project (*.vprj *.VPrj *.VPRJ);;All files (*)",
+            "Projects (*.swproj *.vprj *.VPrj *.VPRJ)"
+            ";;Snipwright Project (*.swproj)"
+            ";;VideoReDo Project (*.vprj *.VPrj *.VPRJ)"
+            ";;All files (*)",
         )
         if not paths:
             return
@@ -417,8 +421,12 @@ class BatchManagerDialog(QDialog):
             )
             return
 
+        # Both formats. Where a folder holds a .swproj and a .vprj for the
+        # same recording, sorting puts the .swproj first and the duplicate
+        # check below then skips the .vprj - so the Snipwright project wins.
         found = sorted(
-            glob.glob(os.path.join(folder, "*.vprj"))
+            glob.glob(os.path.join(folder, "*.swproj"))
+            + glob.glob(os.path.join(folder, "*.vprj"))
             + glob.glob(os.path.join(folder, "*.VPrj"))
         )
 
@@ -724,6 +732,17 @@ class BatchManagerDialog(QDialog):
                 self.tr("The project file no longer exists:\n\n%s")
                 % job.vprj_path,
             )
+            return
+        from project.formats import is_queued_join
+        if is_queued_join(job.vprj_path):
+            # A queued join is a snapshot of the Joiner list as it was when
+            # queued.  Opening it in the Joiner would let changes be made that
+            # never reach this job, so say how to change it instead.
+            QMessageBox.information(
+                self, self.tr("Edit"),
+                self.tr("This is a joined video queued from the Joiner. To "
+                        "change it, remove it from the queue, edit the "
+                        "Joiner list and queue it again."))
             return
         was_held = job.status == NEEDS_REVIEW
         # Only act if the editor actually started loading it (the user may

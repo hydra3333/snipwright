@@ -39,6 +39,18 @@ and Desktop shortcut (using the app icon) that launches without a console
 window.  If ffmpeg/mkvmerge were just installed, a sign-out/in may be needed
 before Snipwright detects them (see **Settings → External tools**).
 
+At the end it **offers** - only offers; the answer is No unless you say
+otherwise - to exclude Snipwright's own Python folder (`.venv`) from Windows
+Defender. Defender checks every file Snipwright loads the first time it starts
+after a reboot: in testing that first start took about 9 seconds, and about
+5.5 with the exclusion. Later starts take about a second either way. The
+trade-off is that Defender stops scanning that folder altogether. Only the
+installer (through pip) puts files there, so the risk is small, but it is your
+choice. It needs administrator permission, so Windows will ask; if your
+antivirus is managed by an organisation it may not be allowed, and Snipwright
+works the same either way. To undo it, run `Remove-MpPreference -ExclusionPath`
+with the folder's path in PowerShell as administrator.
+
 > The Windows installer has had basic testing — it installs the dependencies and
 > the application launches and runs. Functionality beyond that hasn't been
 > exercised much on Windows yet.

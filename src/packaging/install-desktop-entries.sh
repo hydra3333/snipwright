@@ -32,7 +32,7 @@ Icon=$ICON
 Terminal=false
 StartupWMClass=snipwright
 Categories=AudioVideo;Video;AudioVideoEditing;
-MimeType=video/mp2t;video/x-matroska;video/mp4;video/mpeg;video/quicktime;video/x-msvideo;application/x-vrd-project;
+MimeType=video/mp2t;video/x-matroska;video/mp4;video/mpeg;video/quicktime;video/x-msvideo;application/x-vrd-project;application/x-snipwright-project;
 StartupNotify=true
 EOF
 
@@ -50,6 +50,11 @@ cat > "$MIME/packages/snipwright.xml" <<EOF
     <glob pattern="*.VPRJ"/>
     <generic-icon name="application-x-vrd-project"/>
   </mime-type>
+  <mime-type type="application/x-snipwright-project">
+    <comment>Snipwright project</comment>
+    <glob pattern="*.swproj"/>
+    <generic-icon name="application-x-snipwright-project"/>
+  </mime-type>
 </mime-info>
 EOF
 if command -v update-mime-database >/dev/null 2>&1; then
@@ -63,6 +68,7 @@ ICONS="$HOME/.local/share/icons/hicolor/scalable/mimetypes"
 if [ -f "$SRC/assets/project_icon.svg" ]; then
     mkdir -p "$ICONS"
     cp "$SRC/assets/project_icon.svg" "$ICONS/application-x-vrd-project.svg"
+    cp "$SRC/assets/project_icon.svg" "$ICONS/application-x-snipwright-project.svg"
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" \
             >/dev/null 2>&1 || true
@@ -77,6 +83,13 @@ fi
 # Offering it as a choice is friendlier - the user can set it as default
 # themselves if they want to.  (update-desktop-database is run once below,
 # after the watcher entry is written too.)
+#
+# Snipwright's own .swproj is the opposite case: nothing else opens it, so
+# there is no other handler to displace, and making Snipwright its default
+# is what lets a double-click on one open it at all.
+if command -v xdg-mime >/dev/null 2>&1; then
+    xdg-mime default snipwright.desktop application/x-snipwright-project >/dev/null 2>&1 || true
+fi
 
 cat > "$APPS/snipwright-watcher.desktop" <<EOF
 [Desktop Entry]

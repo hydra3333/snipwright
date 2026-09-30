@@ -6,6 +6,131 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.9.0] - 2026-09-30
+
+### Added
+
+- **Chalkline learns a channel's break ident, and uses it.** Some channels
+  show the same short full-screen card at the very start and end of every
+  advert break - Film4's red ident is the first seen. When you save a
+  corrected project, Chalkline now learns that card as well as the logo,
+  if it appears at most break edges and never in the programme. From then
+  on it puts each break's start and end on the exact frame - Film4's edges
+  had been 5 to 8 seconds out, cutting a few seconds of film at every break
+  - and on a channel where nothing else marks the breaks, such as a
+  full-screen Film4 film, it finds the breaks themselves. ITV1, ITV4, Rewind
+  TV and Sky Mix have cards too and gain more exact edges. The lead-in and
+  the end of a recording aren't marked by the card, so a full-screen film's
+  may still need trimming by hand.
+
+- **Snipwright has its own project format, `.swproj`.** A VideoReDo project
+  records each cut as two times and nothing else, so Snipwright has always
+  had to guess which recording a project belongs to and map the times back
+  to frames, hoping they land on the same ones. A Snipwright project records
+  the recording itself - so it can tell when it is opened against a
+  different copy, and find a recording moved together with its project -
+  and places every cut on the exact frame you chose, even on a broadcast
+  whose clock jumps. It also notes whether the cuts came from you or from the
+  advert detector. It is a readable text file.
+
+  **Nothing changes for you unless you choose it.** A new installation saves
+  Snipwright projects; an existing one carries on saving `.vprj` until you
+  switch in Settings > Files & folders > Project format. Both open in
+  Snipwright either way, and Save Project As offers both, along with an EDL.
+  VideoReDo cannot open a `.swproj`, so if you move projects between the two,
+  stay on `.vprj`.
+
+  The Watcher writes whichever format you choose, and the batch queue and
+  Batch Manager take either. Projects the queue makes for itself are always
+  Snipwright's own, so a queued export cuts on exactly the frames the editor
+  showed.
+
+- **The Joiner can send its list to the batch queue.** Joining recordings
+  that don't match has to re-encode the whole thing, which can take a long
+  time - exactly when you would rather it ran in the background. Joiner >
+  Queue Joiner List to Batch, or Queue to batch in the Joiner list window,
+  queues the join instead of running it now. It asks the same questions
+  Create Video does, keeps your answer with the job, and uses the Batch
+  Manager's profile and output folder like any other job. The result is the
+  same file Create Video would have made.
+
+  A join you have already started can be handed over as well: its progress
+  window now has Send to Batch, as an export's does, and the join carries on
+  in the Batch Manager from where it was rather than starting again.
+
+- **The export summary says which subtitles the file kept.** The window at
+  the end of an export or a join now has a Subtitles line, read from the
+  finished file itself - "DVB subtitles (eng)", say, or "None" - and the
+  summary written to the log says the same, batch exports included. Subtitles can
+  go missing for good reasons (a format that can't hold them, a join that has
+  to be re-encoded), and when they do the summary already says why; now it
+  also says plainly what you have. The same window was partly untranslated -
+  only its title was in German - and is now translated in full.
+
+- **Faster first start on Windows, if you choose it.** Windows Defender
+  checks every file Snipwright loads the first time it starts after a reboot,
+  which roughly doubled that first start - about 9 seconds rather than 5.5 in
+  testing. The Windows installer now offers, at the end, to exclude
+  Snipwright's own Python folder from those checks. It explains the trade-off
+  - Defender stops scanning that folder - and does nothing unless you say
+  yes. Later starts are quick either way. Snipwright's log now also records
+  how long each start took.
+
+- **Programme information now lists the subtitles.** Tools > Show video
+  programme information showed the video and every audio track but said
+  nothing about subtitles, so there was no way to tell from inside Snipwright
+  whether a recording had any. Each subtitle track now gets its own section
+  with its type, language, PID and - for broadcast subtitles - the page
+  number, as VideoReDo showed. It tells you the track is there; a
+  broadcaster can still leave it empty for part of a recording.
+
+### Fixed
+
+- **Save Project As could ignore the format you chose.** The suggested name
+  already ends in a project extension, and the format you picked was only
+  used when the name had none - so choosing EDL saved a file called
+  `name.vprj.edl`. The format you choose now decides, and the extension in
+  the name follows it, changing as you switch format where your desktop's
+  save dialog allows.
+
+- **Ticking or unticking Favourites Only in Save Video lost your choice of
+  profile.** The list jumped back to its first entry, Match Source, whatever
+  you had picked. It now keeps the profile you chose. If ticking the box hides
+  it, the first favourite with the same container is picked instead, so an
+  MKV choice stays MKV; and a one-off edit to the profile is kept too.
+
+- **A join that had to be re-encoded dropped subtitles without saying so.**
+  Joining recordings that don't match - standard and high definition, say -
+  re-encodes the picture and sound, and broadcast subtitles can't come
+  through that process, so the joined video had none. The completion summary
+  and the log now say so. A join of scenes that all match isn't re-encoded,
+  and keeps its subtitles as before.
+
+- **A channel could keep switching between logos that were as good as each
+  other.** Where a channel holds several learned logos that all see the
+  programme equally well, the one in use could change with every recording
+  on differences of a fraction of a percent - each time reporting that it
+  had "found a better logo". A logo now has to be clearly better on the
+  recordings both have been measured against before it takes over.
+
+- **Subtitles came on by themselves in every exported .mkv.** A broadcast
+  recording carries no "default track" information, so the tool that builds
+  the .mkv marked every track as a default - subtitles included - and in a
+  .mkv that tells your player to show them. Every recording exported to .mkv
+  therefore opened with subtitles on, and they had to be switched off each
+  time. Subtitles are now kept but left off, for you to turn on when you
+  want them.
+
+  **Files you have already exported can be put right without re-exporting**,
+  with a small separate tool in the `tools` folder: `fix-subtitle-defaults`
+  (run the `.bat` on Windows, the `.sh` on Linux). Choose a folder and it
+  works through every subfolder, shows you what it would change, and changes
+  nothing until you press Apply. It only switches off subtitles in the same
+  language as the audio - a foreign-language film's subtitles are left alone -
+  and never touches a track marked forced. Only the one setting in each file
+  changes, so it is quick even over a network. It is not part of Snipwright
+  itself and can be ignored once it has done its job.
+
 ## [2.8.0] - 2026-09-20
 
 ### Changed

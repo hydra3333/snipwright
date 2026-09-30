@@ -237,6 +237,11 @@
         <source>Working</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="55"/>
+        <source>Joining</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>BatchManagerDialog</name>
@@ -606,6 +611,11 @@ See the Status column for what went wrong with the failed jobs.</source>
         <source>Batch finished</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../ui/batch_manager.py" line="743"/>
+        <source>This is a joined video queued from the Joiner. To change it, remove it from the queue, edit the Joiner list and queue it again.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>Comskip</name>
@@ -743,6 +753,61 @@ See the Status column for what went wrong with the failed jobs.</source>
         <source>OK</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video length:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video size:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Output scenes:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video output frames:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Audio output frames:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Audio tracks:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Subtitles:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Processing time:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Processed frames/sec:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>Video bitrate:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="300"/>
+        <source>None</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ExportProgressDialog</name>
@@ -800,6 +865,11 @@ See the Status column for what went wrong with the failed jobs.</source>
     <message>
         <location filename="../ui/export_dialogs.py" line="223"/>
         <source>Estimated time remaining: done</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/export_dialogs.py" line="195"/>
+        <source>Joining…</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -876,6 +946,26 @@ See the Status column for what went wrong with the failed jobs.</source>
     <message>
         <location filename="../ui/settings_pages/files.py" line="99"/>
         <source>Add a favourite folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="82"/>
+        <source>Project format:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="85"/>
+        <source>Snipwright (.swproj)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="87"/>
+        <source>VideoReDo (.vprj)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/settings_pages/files.py" line="95"/>
+        <source>The format Save Project writes. A Snipwright project records which recording it belongs to and places its cuts on the exact frames you chose, but VideoReDo cannot open it - choose VideoReDo if you move projects between the two. Either kind opens in Snipwright, and Save Project As offers both.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -1690,6 +1780,16 @@ Yes = append,  No = replace the current list.</source>
 %s</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../ui/joiner_dialog.py" line="306"/>
+        <source>Queue to batch</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/joiner_dialog.py" line="308"/>
+        <source>Add this list to the batch queue, to be joined later with the Batch Manager's profile and output folder.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>LoggingPage</name>
@@ -2234,11 +2334,6 @@ Go ahead?</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../main.py" line="1761"/>
-        <source>Cancelling…</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="../main.py" line="1777"/>
         <source>Joined video created: %s</source>
         <translation type="unfinished"></translation>
@@ -2441,11 +2536,6 @@ Quick Stream Fix rebuilds the recording&apos;s timestamps without re-encoding, a
         <source>An export is still being written in the background. Quitting will stop it, and the part-finished file will be discarded.
 
 Quit anyway?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../main.py" line="1732"/>
-        <source>Preparing…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2900,6 +2990,28 @@ Your scene markers have been carried over, but the repair can shift them slightl
         <source>A batch is still running. Quitting will stop it after the current job.
 
 Quit anyway?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1052"/>
+        <source>Queue Joiner List to Batch</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1721"/>
+        <source>The joiner list could not be queued:
+
+%s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1814"/>
+        <source>Creating %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1890"/>
+        <source>Send to Batch</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3789,6 +3901,56 @@ Use it anyway?</source>
     <message>
         <location filename="../utils/program_info.py" line="434"/>
         <source>Sample size</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVB subtitles</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVB teletext</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>PGS (Blu-ray)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>DVD subtitles</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>SubRip text</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>ASS text</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>MP4 text</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Subtitle Stream: %d</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Type</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../utils/program_info.py" line="251"/>
+        <source>Page</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

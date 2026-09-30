@@ -117,6 +117,11 @@ def ensure_config():
         exist_ok=True,
     )
 
+    # Whether this is an existing installation. Decided BEFORE the defaults
+    # are written, because a setting that must differ between a new install
+    # and an upgrade (the project format) cannot be told apart afterwards.
+    existing_install = CONFIG_FILE.exists()
+
     if not CONFIG_FILE.exists():
 
         CONFIG_FILE.write_text(
@@ -145,6 +150,16 @@ def ensure_config():
     #
 
     changed = False
+
+    # An installation from before the native project format existed keeps
+    # writing .vprj until its owner chooses otherwise. Without this, the merge
+    # below would hand it the NEW-install default and switch format silently
+    # on upgrade. A new install already has "swproj" from the defaults.
+    paths = config.get("paths")
+    if (existing_install and isinstance(paths, dict)
+            and "project_format" not in paths):
+        paths["project_format"] = "vprj"
+        changed = True
 
     for key, value in DEFAULT_CONFIG.items():
         if key not in config:

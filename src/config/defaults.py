@@ -133,6 +133,13 @@ DEFAULT_CONFIG = {
         "project_folder": "",
         "last_project": "",
 
+        # The format Save Project writes: "swproj" (Snipwright's own) or
+        # "vprj" (VideoReDo's). This default is what a NEW installation gets;
+        # an existing settings file without the key is given "vprj" by
+        # config/loader.py, so an upgrade never changes format underneath
+        # someone.
+        "project_format": "swproj",
+
         # Folders offered as one-click destinations in the Save Video dialog,
         # for people who keep different series on different drives.  A plain
         # list of paths, in the order the user arranged them.

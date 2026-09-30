@@ -248,6 +248,45 @@ def _pid_int(stream):
 _PCM16_AUDIO = {"mp2", "mp3", "aac", "aac_latm", "ac3", "eac3", "dts"}
 
 
+# Subtitle codec -> the name shown as its Type.  VideoReDo calls a DVB stream
+# "DVB Subpic"; the plainer "DVB subtitles" says the same thing.
+_SUBTITLE_TYPES = {
+    "dvb_subtitle": QT_TRANSLATE_NOOP("ProgramInfo", "DVB subtitles"),
+    "dvb_teletext": QT_TRANSLATE_NOOP("ProgramInfo", "DVB teletext"),
+    "hdmv_pgs_subtitle": QT_TRANSLATE_NOOP("ProgramInfo", "PGS (Blu-ray)"),
+    "dvd_subtitle": QT_TRANSLATE_NOOP("ProgramInfo", "DVD subtitles"),
+    "subrip": QT_TRANSLATE_NOOP("ProgramInfo", "SubRip text"),
+    "ass": QT_TRANSLATE_NOOP("ProgramInfo", "ASS text"),
+    "mov_text": QT_TRANSLATE_NOOP("ProgramInfo", "MP4 text"),
+}
+
+
+def _dvb_subtitle_pages(path):
+    """{stream index: composition page} for every DVB subtitle stream.
+
+    The composition page - what VideoReDo shows as "Page" - is carried in the
+    stream's subtitling descriptor, which ffprobe does not list as a field.
+    FFmpeg keeps that descriptor as the stream's extradata: two bytes of
+    composition page, two of ancillary page, one of subtitling type.  Empty
+    on any failure; the page then shows as N/A.
+    """
+    pages = {}
+    try:
+        import av
+        with av.open(path) as container:
+            for stream in container.streams.subtitles:
+                # PyAV names the decoder "dvbsub"; ffprobe calls the same
+                # codec "dvb_subtitle".
+                if stream.codec_context.name not in ("dvbsub", "dvb_subtitle"):
+                    continue
+                data = stream.codec_context.extradata
+                if data and len(data) >= 2:
+                    pages[stream.index] = int.from_bytes(data[0:2], "big")
+    except Exception:
+        pass
+    return pages
+
+
 def gather_program_info(path, frame_count=None, fps=None):
     """Return a list of (section_title, [(label, value), ...]) for `path`.
 
@@ -434,6 +473,27 @@ def gather_program_info(path, frame_count=None, fps=None):
             (QT_TRANSLATE_NOOP("ProgramInfo", "Sample size"), sample_size),
         ]))
 
+    # ---- Subtitles (one section per stream) ------------------------------
+    # Confirmation that a recording carries subtitles, as VideoReDo showed.
+    # This says the stream is declared; a broadcaster may leave it empty for
+    # part of a recording, which only reading the whole file would show.
+    subtitles = [s for s in streams if s.get("codec_type") == "subtitle"]
+    pages = _dvb_subtitle_pages(path) if any(
+        s.get("codec_name") == "dvb_subtitle" for s in subtitles) else {}
+    for i, sub in enumerate(subtitles, start=1):
+        codec_name = sub.get("codec_name", "")
+        kind = _SUBTITLE_TYPES.get(codec_name, (codec_name or _NA).upper())
+        lang = (sub.get("tags", {}) or {}).get("language", _NA)
+        page = pages.get(sub.get("index"))
+        title = QT_TRANSLATE_NOOP("ProgramInfo", "Subtitle Stream: %d") % i
+        sections.append((title, [
+            (QT_TRANSLATE_NOOP("ProgramInfo", "Type"), kind),
+            (QT_TRANSLATE_NOOP("ProgramInfo", "Language"), lang),
+            (QT_TRANSLATE_NOOP("ProgramInfo", "PID"), _stream_id(sub)),
+            (QT_TRANSLATE_NOOP("ProgramInfo", "Page"),
+             str(page) if page is not None else _NA),
+        ]))
+
     return sections
 
 
@@ -454,6 +514,7 @@ def to_plaintext(sections):
 # the translations.  Recognise it here and rebuild it from the translated
 # pattern instead, so both the dialog and the clipboard get it right.
 _AUDIO_TITLE = _re.compile(r"^Audio Stream: (\d+)(.*)$")
+_SUBTITLE_TITLE = _re.compile(r"^Subtitle Stream: (\d+)$")
 
 
 def translate_text(text):
@@ -472,4 +533,9 @@ def translate_text(text):
         return QCoreApplication.translate(
             "ProgramInfo", "Audio Stream: %d%s"
         ) % (int(match.group(1)), primary)
+    match = _SUBTITLE_TITLE.match(text)
+    if match:
+        return QCoreApplication.translate(
+            "ProgramInfo", "Subtitle Stream: %d"
+        ) % int(match.group(1))
     return QCoreApplication.translate("ProgramInfo", text)

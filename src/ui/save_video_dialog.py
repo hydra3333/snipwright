@@ -182,7 +182,27 @@ class SaveVideoDialog(QDialog):
                 save_config(self.config)
             except Exception:
                 pass          # a preference that won't save is not an error
-        self._fill_table()
+        # Keep the profile the user had chosen.  This used to refill with no
+        # selection, so ticking or unticking the box jumped the list to its
+        # first row ("Match Source") whatever had been picked.  If the chosen
+        # profile is hidden by the filter, the first one left with the same
+        # container is the nearest thing: an MKV choice stays MKV.
+        current = self._selected_profile()
+        override = self._override_profile
+        self._fill_table(
+            keep_name=current.name if current else None,
+            keep_container=current.container if current else None)
+        # A one-off edit belongs to the profile it was made from, so it
+        # survives the filter changing as long as that profile is still the
+        # one selected - refilling the list reselects it, which on its own
+        # would discard the edit.
+        now = self._selected_profile()
+        if (override is not None and current is not None and now is not None
+                and now.name == current.name):
+            self._override_profile = override
+            self.profile_field.setText(
+                self.tr("%s  \u2014  edited for this export") % override.name)
+            self._apply_profile_path(override)
 
     def _show_all_quietly(self):
         """Drop the favourites filter so a preselected profile is visible.
@@ -239,7 +259,7 @@ class SaveVideoDialog(QDialog):
                 return favs
         return list(self._profiles)
 
-    def _fill_table(self, keep_name=None):
+    def _fill_table(self, keep_name=None, keep_container=None):
         rows = self._visible_profiles()
         self.table.setRowCount(len(rows))
         self._row_profiles = rows
@@ -271,6 +291,14 @@ class SaveVideoDialog(QDialog):
                 # choice; an exact name comes in through keep_name above.
                 select_row = i
                 matched_container = True
+        # The named profile is not in the list (the filter hides it): fall
+        # back to the first one with the same container.
+        if (keep_name is not None and keep_container is not None
+                and not any(p.name == keep_name for p in rows)):
+            for i, p in enumerate(rows):
+                if p.container == keep_container:
+                    select_row = i
+                    break
         if rows:
             self.table.selectRow(select_row)
 

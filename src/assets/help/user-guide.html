@@ -129,8 +129,8 @@ common broadcast and file types &mdash; <code>.ts</code>, <code>.mkv</code>,
 MPEG program-stream family (<code>.mpg</code>, <code>.mpeg</code>, <code>.vob</code>)
 &mdash;
 and you can pick any other file with the <strong>All files</strong> filter. You can also
-<strong>drag a file onto the window</strong> to open it, and a <code>.vprj</code> project
-opens straight into the editor. Choosing <em>several</em> videos at once &mdash; whether
+<strong>drag a file onto the window</strong> to open it, and a project &mdash; a
+<code>.swproj</code> or a <code>.vprj</code> &mdash; opens straight into the editor. Choosing <em>several</em> videos at once &mdash; whether
 in the Open dialog or by dropping them together &mdash; offers to add them all to the
 joiner list, each as a whole file (see <a href="#joiner">Joining recordings</a>). The
 editor window has four main areas:</p>
@@ -152,7 +152,10 @@ accurately. This is cached, so opening the same file again is instant.</p>
 folder &mdash; <code>install-linux.sh</code> for Debian/Ubuntu/Mint and
 <code>install-windows.ps1</code> for Windows &mdash; which set up the dependencies, a
 virtual environment, and menu/desktop shortcuts, so you can start it from your
-applications menu like any other program. See the <code>README</code> there for details.</div>
+applications menu like any other program. On Windows it also offers to exclude
+Snipwright's own Python folder from Windows Defender, which makes the first start after a
+reboot noticeably faster; it explains the trade-off first, and only does it if you say
+yes. See the <code>README</code> there for details.</div>
 
 <h2 id="cutting">3. Marking and cutting</h2>
 <h3>Two ways of working: Cut Mode and Scene Mode</h3>
@@ -313,8 +316,9 @@ only a project you have edited and saved yourself counts.</p>
 <p>A few conditions have to hold before anything is learned, and they are all about having
 trustworthy ground truth to learn from:</p>
 <ul>
-  <li>The project is saved as a <code>.vprj</code>. An EDL does not record the recording's
-  duration, so padding at the ends could not be told apart from adverts.</li>
+  <li>The project is saved as a <code>.swproj</code> or a <code>.vprj</code>. An EDL does
+  not record the recording's duration, so padding at the ends could not be told apart from
+  adverts.</li>
   <li>The edit has at least one advert break in it, of a plausible length, and keeps more
   than half the recording.</li>
   <li>Snipwright can work out which channel the recording came from.</li>
@@ -329,6 +333,15 @@ it already holds are scored against your cuts, and the one that does best is the
 uses from then on. A logo learned from the recording you just saved has to prove itself on
 a later one first, so a single awkward recording cannot displace a logo that has been
 working well.</p>
+<p>The same pass also looks for a channel's <strong>break ident</strong> &mdash; a short,
+full-screen card that some channels show at the very start and end of every advert break,
+such as Film4's red ident. If one appears at the edges of most of the breaks in your
+corrected project, and nowhere in the programme itself, Snipwright remembers it. From then
+on it uses the ident to put each break's start and end on the exact frame, and on a
+channel where nothing else marks the breaks &mdash; a full-screen Film4 film has no logo,
+and no black frames between the film and the adverts &mdash; to find the breaks themselves.
+The ident doesn't mark the lead-in or the end of a recording, so on such a film those may
+still need trimming by hand.</p>
 <div class="note"><strong>Learning takes several minutes, and it happens after the save.</strong>
 It decodes the whole recording, so the result arrives well after the save that triggered
 it. The status line tells you when learning has actually started, and again when it
@@ -382,10 +395,27 @@ is not case-sensitive, and it works for both the watcher and manual detection. R
 that don't put the channel in the filename (such as Plex or Jellyfin) simply use the main
 <code>.ini</code>.</div>
 <h3>Projects</h3>
-<p>Your cuts can be saved and reloaded as a project. <strong>Import Project</strong> reads
-VideoReDo <code>.vprj</code> files (both the V5 VRD and V3 Comskip dialects) and EDL files;
-<strong>Export Project</strong> writes them back out. This lets you move edits between
-Snipwright and other tools, or keep a record of your cuts without re-exporting the video.</p>
+<p>Your cuts can be saved and reloaded as a project, so you can keep a record of them without
+re-exporting the video, or come back to an edit later. <strong>File &rarr; Open
+Project</strong> reads three kinds: Snipwright's own <code>.swproj</code>, VideoReDo's
+<code>.vprj</code> (both the V5 VRD and V3 Comskip dialects) and EDL cut lists.
+<strong>Save Project</strong> writes the project back in the format it already is, and
+<strong>Save Project As</strong> lets you choose any of the three.</p>
+<p>A <strong>Snipwright project</strong> (<code>.swproj</code>) records which recording it
+belongs to and places every cut on the exact frame you chose &mdash; even on a broadcast
+whose clock jumps partway through, where times alone are unreliable. It notices when it is
+opened against a different copy of the recording, finds a recording that has been moved
+together with its project, and notes whether the cuts came from you or from the advert
+detector. <strong>VideoReDo cannot open it</strong>, so if you move projects between the
+two editors, use <code>.vprj</code>. An <strong>EDL</strong> is only a list of cuts: it does
+not say which recording it belongs to, so it cannot be opened from your file manager or
+queued in the Batch Manager.</p>
+<p>Which format <strong>Save Project</strong> uses for a new project is set in
+<strong>Settings &rarr; Files &amp; folders &rarr; Project format</strong>. A new
+installation starts on Snipwright's own; one that was set up before the format existed stays
+on <code>.vprj</code> until you change it. The watcher writes the same format, and the Batch
+Manager takes either. Projects Snipwright makes for its own use, such as the copies the
+batch queue works from, are always <code>.swproj</code>.</p>
 <div class="note">When a project is moved between Snipwright and VideoReDo, individual cut
 marks may shift by a handful of frames &mdash; the two editors index frames slightly differently
 internally. The cut each editor makes is still frame-accurate to the marks it is showing
@@ -553,6 +583,15 @@ format are joined losslessly by stream copy &mdash; an MKV gets a chapter at eac
 &mdash; while a mix of formats is re-encoded to a common one (Snipwright recommends
 suitable settings). Title cards and fades apply during a re-encoded join, so adding them
 to otherwise matching clips trades a little speed and quality for the effect.</p>
+<p><strong>Joiner &rarr; Queue Joiner List to Batch</strong>, or <strong>Queue to batch</strong>
+in the Joiner list window, does the same join later, in the Batch Manager, rather than now.
+The same checks and the same re-encode question come first, and your answer is kept with
+the job. The join then uses the Batch Manager's profile and output folder like any other
+job, and is named after its first recording with &ldquo; - Joined&rdquo;. The job is a
+snapshot of the list as it was when you queued it: to change it, remove it from the queue,
+edit the list and queue it again. A join you have already started can be handed over too:
+<strong>Send to Batch</strong> in its progress window moves it to the Batch Manager and it
+carries on from where it was, exactly as an export does.</p>
 
 <h3>Trim and Copy Source File</h3>
 <p><strong>Tools &rarr; Trim and Copy Source File</strong> takes a chunk out of a recording by
@@ -621,6 +660,11 @@ to process as-is.</p>
 <div class="note">The watcher runs in the system tray and works <strong>completely
 independently</strong> of the main editor &mdash; you do not need Snipwright open for it to do
 its job.</div>
+<p><strong>Left-click</strong> the tray icon to open the watcher's window, and again to close it
+back to the tray. <strong>Right-click</strong> it for everything else: <strong>Scan
+now</strong>, <strong>Pause</strong>, <strong>Launch Snipwright</strong>, <strong>Open output
+folder</strong>, <strong>Edit ignore list</strong>, <strong>Settings</strong> and
+<strong>Quit</strong>.</p>
 <p>The watcher uses whichever detector is chosen under
 <strong>Settings &rarr; Advert detection</strong> in the editor. It has no separate setting of
 its own, and its control window shows which one it will use. With Chalkline there is nothing

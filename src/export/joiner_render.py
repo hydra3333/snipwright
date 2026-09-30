@@ -25,7 +25,7 @@ from media.pixfmt import for_output as pixfmt_for_output
 from utils.proc import popen_progress, read_stderr
 import tempfile
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 
 logger = logging.getLogger("snipwright")
 
@@ -39,6 +39,7 @@ from export.exporter import (
     _audio_frame_count,
     _audio_track_info,
     _Cancelled as _ExporterCancelled,
+    probe_subtitle_tracks,
 )
 
 
@@ -380,6 +381,8 @@ class JoinerRenderWorker(QThread):
             stats["out_size"] = os.path.getsize(self._out)
         except OSError:
             stats["out_size"] = 0
+        # What the joined file kept, read off it - for the log and the window.
+        stats["subtitle_tracks"] = probe_subtitle_tracks(self._out)
 
         try:
             stats["video_frames"] = _count_output_frames(self._out)
@@ -695,6 +698,29 @@ class JoinerRenderWorker(QThread):
                 "(%s), and joining by re-encoding can only carry the ones "
                 "they share. %d track(s) were kept."
                 % (", ".join(str(c) for c in counts), tracks),
+            ))
+
+        # Subtitles do not survive a re-encoded join.  The picture and sound
+        # go through the concat filter below, and broadcast subtitles are
+        # images on their own timeline that cannot pass through it, so the
+        # joined file is built without them.  That was SILENT: a join of an
+        # SD and an HD recording, both with subtitles (2026-09-25), came out
+        # with none and said nothing.  Say so, in the log and the
+        # completion summary.  A join of scenes that share one format is not
+        # re-encoded and keeps them (see the lossless path's -map 0).
+        with_subs = sum(1 for seg in segments if _subtitle_stream_count(seg))
+        if with_subs:
+            logger.warning(
+                "Joiner: %d of %d scene(s) carry subtitles, but a join that "
+                "has to be re-encoded cannot carry them; the joined video "
+                "has none.", with_subs, len(segments))
+            self._notes.append((
+                "subtitles could not be carried through",
+                "%d of the %d scenes had subtitles, but a join that has to "
+                "be re-encoded passes the picture and sound through a filter "
+                "that subtitles cannot go through, so the joined video has "
+                "none. A join of scenes that all share one format is not "
+                "re-encoded, and keeps them." % (with_subs, len(segments)),
             ))
         if tracks == 0:
             logger.warning("Joiner: no audio track common to every scene.")
@@ -1064,3 +1090,70 @@ class JoinerRenderWorker(QThread):
         else:
             # Match source (.ts) - the joined file is the output.
             shutil.move(joined_ts, self._out)
+
+
+def _subtitle_stream_count(path):
+    """How many subtitle streams a file has, or 0 if it cannot be read."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_entries", "stream=index", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return sum(1 for line in out.splitlines() if line.strip())
+
+
+class JoinExportAdapter(QObject):
+    """Makes a running join look like an editor export to whoever watches it.
+
+    The export progress window and the Batch Manager's adopted-export rows
+    both expect an export worker's signals: progress as a dictionary, a stats
+    dictionary when finished, and a separate "cancelled".  The Joiner's worker
+    reports a percentage and a line of text, the output path, and cancelling
+    as a failure whose message is "Cancelled.".  This translates, so a join
+    gets the same window as an export - Abort and Send to Batch included -
+    and can be handed to the Batch Manager while it runs, exactly as an
+    export can.  Nothing about the render itself changes.
+    """
+    progress = Signal(dict)
+    finished_ok = Signal(dict)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, worker, parent=None):
+        super().__init__(parent)
+        self.worker = worker
+        self.source_path = ""       # several sources; none to protect singly
+        worker.progress.connect(self._on_progress)
+        worker.finished_ok.connect(self._on_finished)
+        worker.failed.connect(self._on_failed)
+
+    def _on_progress(self, percent, label):
+        self.progress.emit({"phase": "join", "percent": int(percent),
+                            "label": label})
+
+    def _on_finished(self, path):
+        stats = dict(getattr(self.worker, "stats", None) or {})
+        stats.setdefault("out_path", path)
+        self.finished_ok.emit(stats)
+
+    def _on_failed(self, message):
+        if message == "Cancelled.":
+            self.cancelled.emit()
+        else:
+            self.failed.emit(message)
+
+    # The controller cancels and waits on an adopted worker.
+    def cancel(self):
+        self.worker.cancel()
+
+    def wait(self, ms=None):
+        return self.worker.wait(ms) if ms is not None else self.worker.wait()
+
+    def isRunning(self):
+        return self.worker.isRunning()
+
+    def start(self):
+        self.worker.start()

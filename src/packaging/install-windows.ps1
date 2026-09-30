@@ -12,7 +12,10 @@
       2. create a virtual environment in the project root (.venv) and install
          the Python dependencies from requirements.txt into it;
       3. create a Start-menu and Desktop shortcut called "Snipwright", using the
-         app icon, that launches without a console window.
+         app icon, that launches without a console window;
+      4. offer - only offer, the answer is No unless you say otherwise - to
+         exclude Snipwright's own Python folder (.venv) from Windows Defender,
+         which makes the first start after a reboot noticeably faster.
 
     It reports each step and pauses at the end, so you can see what happened.
     Re-running it is safe.  Nothing is changed system-wide except the winget
@@ -261,12 +264,108 @@ try {
     Warn "(Snipwright still runs; you can open projects from File > Import Project.)"
 }
 
+# --- .swproj association (per-user) ----------------------------------------
+# Snipwright's own project format. Unlike .vprj, nothing else opens a .swproj,
+# so there is no existing default to preserve: Snipwright IS the default, which
+# is what makes double-clicking one open it. Per-user under HKCU as above.
+try {
+    $swProgId = "Snipwright.SwProject"
+    $classes = "HKCU:\Software\Classes"
+    $cmd = "`"$venvPyw`" `"$mainPy`" `"%1`""
+    New-Item -Path "$classes\$swProgId\shell\open\command" -Force | Out-Null
+    Set-ItemProperty -Path "$classes\$swProgId" -Name "(default)" -Value "Snipwright Project"
+    Set-ItemProperty -Path "$classes\$swProgId" -Name "FriendlyAppName" -Value "Snipwright"
+    Set-ItemProperty -Path "$classes\$swProgId\shell\open" -Name "FriendlyAppName" -Value "Snipwright"
+    Set-ItemProperty -Path "$classes\$swProgId\shell\open\command" -Name "(default)" -Value $cmd
+    $swIcon = if (Test-Path $ProjIcon) { $ProjIcon } else { $Icon }
+    if (Test-Path $swIcon) {
+        New-Item -Path "$classes\$swProgId\DefaultIcon" -Force | Out-Null
+        Set-ItemProperty -Path "$classes\$swProgId\DefaultIcon" -Name "(default)" -Value "$swIcon,0"
+    }
+    New-Item -Path "$classes\.swproj" -Force | Out-Null
+    Set-ItemProperty -Path "$classes\.swproj" -Name "(default)" -Value $swProgId
+    New-Item -Path "$classes\.swproj\OpenWithProgids" -Force | Out-Null
+    Set-ItemProperty -Path "$classes\.swproj\OpenWithProgids" -Name $swProgId -Value ([byte[]]@()) -Type Binary
+    New-Item -Path "$classes\.swproj\OpenWithList\snipwright.exe" -Force | Out-Null
+
+    Info "Registered Snipwright as the program for .swproj files."
+} catch {
+    Warn "Couldn't register the .swproj file association - $($_.Exception.Message)"
+    Warn "(Snipwright still runs; you can open projects from File > Import Project.)"
+}
+
 # Windows caches every icon it has ever drawn, keyed by path, and will happily
 # keep showing an old one after the file behind it has been replaced.  Nudging
 # the shell saves the user working out why a reinstall changed nothing.
 try {
     ie4uinit.exe -show 2>$null
 } catch { }
+
+# --- 4. optional: Defender exclusion for the venv --------------------------
+# Measured in a Windows VM (2026-09-26): the first start after a reboot took
+# about 9 seconds, and about 5.5 with this exclusion - Defender checks every
+# library Python loads, and Qt alone is hundreds of them.  Later starts are
+# about a second either way, because Windows keeps the files in memory.
+# A system-wide Python install was measured too and did NOT help: Defender
+# scans those files just the same.  So the exclusion is the one change that
+# works - and it is a real trade-off, because Defender stops scanning that
+# folder altogether.  Only ever offered, never assumed, and the default is No.
+# It needs administrator rights, which nothing else here does, so only this
+# one command is run elevated (Windows shows its permission prompt).
+Section "Optional: a faster first start"
+$mpAvailable = [bool](Get-Command Add-MpPreference -ErrorAction SilentlyContinue)
+$defenderOn = $false
+if ($mpAvailable) {
+    try {
+        $status = Get-MpComputerStatus -ErrorAction Stop
+        $defenderOn = [bool]$status.AntivirusEnabled
+    } catch { $defenderOn = $false }
+}
+if (-not (Test-Path $Venv)) {
+    Info "Skipped: there is no .venv folder to exclude."
+} elseif (-not $defenderOn) {
+    Info "Skipped: Windows Defender is not the active antivirus on this PC, so"
+    Info "there is nothing to change here."
+} else {
+    Info "Windows Defender checks every file Snipwright loads the first time it"
+    Info "starts after a reboot, which roughly doubles that first start (in testing,"
+    Info "about 9 seconds instead of 5).  Later starts are quick either way."
+    Info ""
+    Info "You can exclude Snipwright's own Python folder from those checks:"
+    Info "    $Venv"
+    Info ""
+    Warn "The trade-off: Defender will no longer scan ANYTHING in that folder.  Only"
+    Warn "this installer (through pip) puts files there, so the risk is small - but"
+    Warn "it is a real one, and it is your choice.  Windows will ask for permission."
+    Info ""
+    $answer = Read-Host "  Add the exclusion? [y/N]"
+    if ($answer -match '^(y|yes)$') {
+        # Single quotes inside the path are doubled for PowerShell's own quoting.
+        $quoted = $Venv -replace "'", "''"
+        $command = "try { Add-MpPreference -ExclusionPath '$quoted' -ErrorAction Stop; exit 0 } catch { exit 1 }"
+        try {
+            $proc = Start-Process powershell -Verb RunAs -Wait -PassThru `
+                -WindowStyle Hidden `
+                -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
+            if ($proc.ExitCode -eq 0) {
+                Info "Added.  Snipwright's first start after a reboot should now be faster."
+                Info "To undo it, in PowerShell run as administrator:"
+                Info "    Remove-MpPreference -ExclusionPath '$quoted'"
+            } else {
+                Warn "Windows did not accept the exclusion.  If this PC's antivirus is"
+                Warn "managed by an organisation, or Tamper Protection blocks changes,"
+                Warn "it can only be added in Windows Security > Virus & threat"
+                Warn "protection > Exclusions.  Snipwright works either way."
+            }
+        } catch {
+            Warn "Not added: permission was not given.  Snipwright works either way;"
+            Warn "re-run this installer to be asked again."
+        }
+    } else {
+        Info "Not added.  Snipwright works exactly the same, just slower to start the"
+        Info "first time after a reboot."
+    }
+}
 
 Section "Done."
 Info "Launch Snipwright from the Start menu or the Desktop shortcut."

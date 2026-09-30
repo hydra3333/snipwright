@@ -111,6 +111,10 @@ import numpy as np
 # a second, which is finer than the edge refinement that follows it.
 FPS = 2.0
 GW, GH = 160, 90
+# Edge-card frames (item 1u): the whole picture, in colour, this small.  An
+# ident is a full-screen card, so its layout at this size is its fingerprint;
+# 432 bytes a frame, under 10 MB for a three-hour recording.
+CARD_W, CARD_H = 16, 9
 
 # Break length bounds, measured across the thirteen hand-corrected breaks in
 # the corpus.  They run from 100s (U&Dave) to 342s (5USA).
@@ -817,7 +821,7 @@ def audio_signals(video, duration, verbose=False, progress_cb=None,
 
 
 def video_signals(video, duration, workdir, verbose=False, progress_cb=None,
-                  cancel_cb=None):
+                  cancel_cb=None, want_cards=False):
     """Black frames, scene changes AND the analysis frames, in one decode.
 
     Previously two full decodes of the same video: instant_signals() for the
@@ -861,6 +865,20 @@ def video_signals(video, duration, workdir, verbose=False, progress_cb=None,
 
     Frames come back as a read-only memmap so nothing here is obliged to hold
     the whole recording in memory.
+
+    With want_cards=True a third, tiny branch of the same split also writes
+    EDGE-CARD frames: the whole picture in colour at CARD_W x CARD_H, at the
+    same FPS, one per analysis frame - and a fourth value is returned (None
+    if they could not be read).  They are what an edge card (item 1u: a
+    channel's ident at the start and end of each break, Film4's red card
+    being the first) is recognised from.  Colour, because the case they are
+    for is a FULL-SCREEN film, which has no black bars to set a card apart;
+    measured on two letterboxed Film4 films the programme came no closer than
+    26-29 in colour against the ident's own 1.6-1.8, and only 19-20 in
+    greyscale, where a dim even scene could pass for a grey card.  Adding the
+    branch leaves frames.raw byte-identical (checked when it was added): it
+    is one more output of the split, which the notes above clear, not an
+    audio output, which they do not.
     """
     # The scene file goes in the workdir under a BARE filename, and ffmpeg is
     # run from there.
@@ -886,21 +904,30 @@ def video_signals(video, duration, workdir, verbose=False, progress_cb=None,
     scene_name = "addetect-scenes.txt"
     scene_path = os.path.join(workdir, scene_name)
     path = os.path.join(workdir, "frames.raw")
+    card_path = os.path.join(workdir, "cards.raw")
 
-    graph = (f"[0:v]split=2[a][b];"
+    graph = (f"[0:v]split={3 if want_cards else 2}[a][b]"
+             f"{'[c]' if want_cards else ''};"
              f"[a]blackdetect=d={BLACK_D}:pic_th={BLACK_PIC}:"
              f"pix_th={BLACK_PIX},"
              f"select='gt(scene,{SCENE_TH})',"
              f"metadata=print:file={scene_name}[v1];"
              f"[b]fps={FPS},scale={GW}:{GH}[v2]")
+    if want_cards:
+        graph += (f";[c]fps={FPS},"
+                  f"scale={CARD_W}:{CARD_H}:flags=area[v3]")
     cmd = [
         "ffmpeg", "-hide_banner", "-nostats",
         "-i", os.path.abspath(video),
         "-filter_complex", graph,
         "-map", "[v1]", "-f", "null", "-",
         "-map", "[v2]", "-pix_fmt", "gray", "-f", "rawvideo",
-        os.path.abspath(path), "-y",
+        os.path.abspath(path),
     ]
+    if want_cards:
+        cmd += ["-map", "[v3]", "-pix_fmt", "rgb24", "-f", "rawvideo",
+                os.path.abspath(card_path)]
+    cmd.append("-y")
     if verbose:
         print("  " + " ".join(cmd[:6]) + " ...", file=sys.stderr)
     text = _run_ffmpeg_progress(cmd, duration, "video signals",
@@ -951,7 +978,15 @@ def video_signals(video, duration, workdir, verbose=False, progress_cb=None,
         if n >= 10:
             frames = np.memmap(path, dtype=np.uint8, mode="r",
                                shape=(n, GH, GW))
-    return blacks, scenes, frames
+    if not want_cards:
+        return blacks, scenes, frames
+    cards = None
+    if os.path.isfile(card_path):
+        n = os.path.getsize(card_path) // (CARD_W * CARD_H * 3)
+        if n >= 10:
+            cards = np.memmap(card_path, dtype=np.uint8, mode="r",
+                              shape=(n, CARD_H, CARD_W, 3))
+    return blacks, scenes, frames, cards
 
 
 # ---------------------------------------------------------------------------
@@ -2075,13 +2110,19 @@ def detect(video, verbose=False, keep=None, learn=None,
         # missing folder.
         os.makedirs(workdir, exist_ok=True)
     try:
-        blacks, scenes, frames = video_signals(video, duration, workdir,
-                                               verbose,
-                                               progress_cb=progress_cb,
-                                               cancel_cb=cancel_cb)
+        blacks, scenes, frames, cards = video_signals(
+            video, duration, workdir, verbose,
+            progress_cb=progress_cb, cancel_cb=cancel_cb, want_cards=True)
         if verbose:
             print(f"  black {len(blacks)}  silence {len(silences)}  "
                   f"scene {len(scenes)}", file=sys.stderr)
+        # Edge-card frames (item 1u), gathered but not yet used: stage 1
+        # only proves they cost nothing and change nothing.  Stage 2 learns a
+        # channel's card from a corrected project; stage 3 detects with it.
+        info["card_frames"] = 0 if cards is None else int(cards.shape[0])
+        if verbose:
+            print(f"  edge-card frames: {info['card_frames']}",
+                  file=sys.stderr)
 
         events = coincidences(blacks, silences, scenes)
 
@@ -2168,6 +2209,29 @@ def detect(video, verbose=False, keep=None, learn=None,
         box = picture_box(widths, heights)
         marks = []
         if learn is not None:
+            # An edge card (item 1u), learned from the same corrected cuts.
+            # Independent of the logo: Film4 has no logo and a card, and the
+            # caller files the card whatever happens to the mask.
+            if cards is not None:
+                card_report = []
+                card = learn_edge_card(cards, times, learn["cuts"],
+                                       card_report)
+                info["card_report"] = card_report
+                if card is not None:
+                    info["card_learned"] = card
+                    # Filed here, as the logo is, so learning from the
+                    # command line (--learn-logo) keeps it too.
+                    if channel:
+                        cpath = card_store_path(store_path)
+                        cstore = load_cards(cpath)
+                        held = add_card(cards_get(cstore, channel), card,
+                                        project=os.path.basename(video))
+                        cards_set(cstore, channel, held)
+                        save_cards(cstore, cpath)
+                        info["cards_held"] = len(held)
+                if verbose:
+                    for line in card_report:
+                        print(f"  {line}", file=sys.stderr)
             # Built here rather than by the caller: only now is the real
             # frame count known, and deriving it from duration x FPS is off
             # by one often enough to matter.
@@ -2685,6 +2749,38 @@ def detect(video, verbose=False, keep=None, learn=None,
 
     breaks, arm = _assemble(mask_br, verbose, marks if mask_br else None)
 
+    # Edge cards (item 1u, stage 3): with a card learned for this channel,
+    # its sightings place the edges of the breaks already found - Film4's
+    # red ident sits exactly on the cut, where refinement had put the edges
+    # 5-8 s out.  After everything else, so it can only move an edge to
+    # where the card says - or, where no technique found a break at all,
+    # add one the card opens and closes (propose_card_breaks).  It never
+    # removes a break.  Not while learning: that pass measures the
+    # recording, it does not report breaks.
+    # Part 2: breaks from the card alone - for a full-screen Film4 film,
+    # where nothing else proposes anything, so this runs with no breaks too.
+    if learn is None and channel and cards is not None:
+        held = channel_cards(load_cards(card_store_path(store_path)),
+                             load_store(store_path), channel)
+        if held:
+            card_report = []
+            sightings = card_sightings(cards, times, held)
+            added = propose_card_breaks(sightings, breaks, card_report)
+            if added:
+                breaks = sorted(list(breaks) + added)
+            breaks, moved = place_card_edges(breaks, sightings, scenes,
+                                             card_report)
+            info["card_sightings"] = len(sightings)
+            info["card_breaks"] = len(added)
+            info["card_edges_moved"] = moved
+            if verbose:
+                print(f"  edge cards: {len(held)} learned, "
+                      f"{len(sightings)} sighting(s), {len(added)} break(s) "
+                      f"found by the card alone, {moved} edge(s) moved",
+                      file=sys.stderr)
+                for line in card_report:
+                    print(f"    {line}", file=sys.stderr)
+
     info.update({
         "channel": channel,
         "duration": duration,
@@ -2699,7 +2795,9 @@ def detect(video, verbose=False, keep=None, learn=None,
         "events": len(events),
         "marks": marks,
     })
-    if arm["reason"]:
+    # Only while there is still nothing to report: a card may have found
+    # breaks where every other technique proposed none.
+    if arm["reason"] and not breaks:
         info["reason"] = arm["reason"]
     if arm.get("tail_swept"):
         info["tail_swept"] = round(arm["tail_swept"], 2)
@@ -3260,12 +3358,25 @@ def mask_tier(record):
     return 2 if any(r.get("fit", True) for r in on.values()) else 0
 
 
+# How much more of the programme a challenger must see, on average over the
+# recordings both were scored on, to take over when neither invents more
+# breaks. Without a margin, logos that are effectively identical traded
+# places on noise: the user's Channel 4 HD held three logos that each saw
+# 99-100% of the programme with no invented breaks, and the channel switched
+# twice in two recordings - announcing "a better logo" each time - on
+# differences of a few hundredths of a point. The real differences measured
+# on the corpus are far larger (TPTV's two logos 6.8 points apart on tptv,
+# ITV1's 92.8), so one point stops the churn without hiding any of them.
+MASK_PROG_MARGIN = 0.01
+
+
 def beats(challenger, incumbent):
     """Is `challenger` better than `incumbent` where BOTH were scored?
 
     Only the projects they share can separate them - see blank_record().  On
     those, fewer invented breaks wins, then more of the programme seen.  With
-    no shared project there is no evidence, so the incumbent stays.
+    no shared project there is no evidence, so the incumbent stays - and a
+    lead on programme seen has to exceed MASK_PROG_MARGIN to count.
     """
     mine = challenger.get("on") or {}
     theirs = incumbent.get("on") or {}
@@ -3278,7 +3389,7 @@ def beats(challenger, incumbent):
         return my_false < their_false
     my_prog = sum(mine[k].get("prog", 0.0) for k in shared)
     their_prog = sum(theirs[k].get("prog", 0.0) for k in shared)
-    return my_prog > their_prog
+    return (my_prog - their_prog) / len(shared) > MASK_PROG_MARGIN
 
 
 def pick_active(history, incumbent=0):
@@ -3497,10 +3608,441 @@ def save_store(store, path=LOGO_STORE):
 
 
 # ---------------------------------------------------------------------------
+# Edge cards (item 1u): learned per channel, kept in their own store
+# ---------------------------------------------------------------------------
+#
+# Some channels frame every advert break with the same short full-screen
+# card - Film4's red ident sits at both ends of each break, exactly on the
+# user's cuts.  Measured over the whole corpus (dev/scripts/
+# edge-card-evidence.py): cards on Film4, ITV4, Rewind TV (on the cut), ITV1
+# and Sky Mix (about a second inside the break); ITV3 and TPTV have something
+# at their edges that ALSO appears in their programmes, and are rejected.
+#
+# Cards live in their OWN file beside the logo store, not in the logo
+# entries.  Film4 has no logo at all, so its entry would hold a card and no
+# mask - and every reader of the logo store (detection, the Remembered Logos
+# window) assumes an entry has one.  A separate file keeps a card from ever
+# reaching them.  It follows whichever logo store is in use, so a corpus
+# run's pinned snapshot pins the cards too.
+
+CARD_MATCH = 8.0          # mean absolute difference that counts as the card
+CARD_CLEAR = 15.0         # the kept programme must never come this close
+CARD_EDGE_WINDOW = 3.0    # seconds just inside an edge to look for the card
+CARD_EDGE_MARGIN = 1.0    # seconds either side of a cut kept out of "programme"
+CARD_OFFSET_REACH = 2.0   # seconds outside an edge the card may start or end
+CARD_SPREAD_MAX = 0.5     # an offset steadier than this can PLACE an edge
+CARD_HISTORY_MAX = 4      # cards a channel keeps; the oldest goes first
+CARD_STORE_VERSION = 1
+
+
+def card_store_path(logo_store_path=LOGO_STORE):
+    """The card store beside a logo store: "chalkline-logos.json" gives
+    "chalkline-cards.json", a corpus snapshot "batch-run36-logos.json" gives
+    "batch-run36-cards.json"."""
+    folder, name = os.path.split(logo_store_path)
+    if "logos" in name:
+        name = name.replace("logos", "cards")
+    else:
+        root, ext = os.path.splitext(name)
+        name = root + "-cards" + (ext or ".json")
+    return os.path.join(folder, name)
+
+
+def load_cards(path):
+    """The card store; a missing or unreadable file is an empty one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, dict) and isinstance(raw.get("channels"), list):
+            return raw
+    except Exception:
+        pass
+    return {"version": CARD_STORE_VERSION, "channels": []}
+
+
+def save_cards(store, path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    store.setdefault("version", CARD_STORE_VERSION)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(store, fh, indent=1)
+    os.replace(tmp, path)
+
+
+def cards_get(store, key):
+    """The cards a channel has learned, newest last, or []."""
+    for entry in store.get("channels", []):
+        if key in entry.get("keys", []):
+            return list(entry.get("cards", []))
+    return []
+
+
+def channel_cards(card_store, logo_store, key):
+    """The cards for a channel under ANY of its names.
+
+    A channel is keyed by name when the recording carries one (Tvheadend) and
+    by service id when it does not (Jellyfin), and the user pairs the two by
+    hand in the Remembered Logos window - so the logo store's entry for this
+    key lists its aliases, and a card learned under either is this channel's.
+    Run 37 filed Film4 as "sid:8385" from one recording and "Film4" from
+    another.  A channel with no logo has no entry to pair, so for it only
+    the exact key is searched.
+    """
+    entry = store_get(logo_store, key)
+    keys = list(entry.get("keys", [])) if entry else []
+    if key not in keys:
+        keys.insert(0, key)
+    held = []
+    for k in keys:
+        for card in cards_get(card_store, k):
+            if card not in held:
+                held.append(card)
+    return held
+
+
+def cards_set(store, key, cards):
+    channels = store.setdefault("channels", [])
+    for entry in channels:
+        if key in entry.get("keys", []):
+            entry["cards"] = list(cards)
+            return store
+    channels.append({"keys": [key], "cards": list(cards)})
+    return store
+
+
+def card_distances(frames, fingerprint):
+    """Mean absolute difference of each card frame from a fingerprint."""
+    diff = np.abs(np.asarray(frames, dtype=np.float32)
+                  - np.asarray(fingerprint, dtype=np.float32))
+    return diff.reshape(len(diff), -1).mean(axis=1)
+
+
+def _offset_side(offsets):
+    """Median and spread of one side's offsets, or None with none to go on."""
+    if not offsets:
+        return None
+    return {"offset": round(float(np.median(offsets)), 3),
+            "spread": round(float(max(offsets) - min(offsets)), 3),
+            "n": len(offsets)}
+
+
+def learn_edge_card(cards, times, cuts, report):
+    """Learn a channel's edge card from a corrected project, or None.
+
+    Tries every frame just inside every middle break's edges as a
+    fingerprint, keeps the one that matches at the most break edges, and
+    accepts it only if it matches
+    at max(3, half the edges) AND the kept programme never comes within
+    CARD_CLEAR of it - the rule that rejects a "card" which is really black
+    or a colour the programmes also show.  Then measures, separately for
+    break starts and ends, where the card sits relative to the cut: Film4's
+    sits on it, ITV1's a steady second inside.
+    """
+    t = np.asarray(times)
+    frames = np.asarray(cards, dtype=np.float32)
+    end = float(t[-1]) if len(t) else 0.0
+    middle = [(a, b) for a, b in cuts if a > 5.0 and b < end - 5.0]
+    if len(middle) < 2:
+        report.append("edge card: fewer than two breaks in the middle of "
+                      "the recording")
+        return None
+
+    def window(a, b):
+        return np.where((t >= a) & (t < b))[0]
+
+    edges = []
+    for a, b in middle:
+        edges.append(window(a, a + CARD_EDGE_WINDOW))
+        edges.append(window(b - CARD_EDGE_WINDOW, b))
+
+    # Every single frame near every break edge, on both sides, is tried as
+    # the fingerprint.  Taking a fixed window just after each break's start
+    # assumed the card begins ON the cut, as Film4's does; ITV1's begins a
+    # second inside, so that window mixed adverts into the fingerprint and
+    # it matched too few edges - and ITV1's cards are often at break ENDS
+    # only.  The frame matching the most edges wins (ties to the closer
+    # match), and its matches are averaged into the final fingerprint.
+    candidates = [i for e in edges for i in e]
+    if not candidates:
+        report.append("edge card: no frames at the break edges")
+        return None
+    best = None
+    for i in candidates:
+        probe = frames[i]
+        hits = []
+        for e in edges:
+            if len(e):
+                d = card_distances(frames[e], probe)
+                j = int(np.argmin(d))
+                if d[j] < CARD_MATCH:
+                    hits.append((e[j], float(d[j])))
+        score = (len(hits), -sum(d for _j, d in hits))
+        if best is None or score > best[0]:
+            best = (score, hits)
+    (matched, _closeness), hits = best
+    if not hits:
+        report.append(f"edge card: none - no frame matched at more than "
+                      f"one break edge")
+        return None
+    fp = frames[[j for j, _d in hits]].mean(axis=0)
+
+    programme = np.ones(len(t), dtype=bool)
+    for a, b in cuts:
+        programme &= ~((t >= a - CARD_EDGE_MARGIN) & (t <= b + CARD_EDGE_MARGIN))
+    clearance = (float(card_distances(frames[programme], fp).min())
+                 if programme.any() else float("inf"))
+
+    needed = max(3, len(edges) // 2)
+    if matched < needed:
+        report.append(f"edge card: none - the best candidate matched "
+                      f"{matched} of {len(edges)} break edges, needs {needed}")
+        return None
+    if clearance <= CARD_CLEAR:
+        report.append(f"edge card: rejected - it matched {matched} of "
+                      f"{len(edges)} break edges, but the programme comes "
+                      f"within {clearance:.1f} of it, so it is not a card")
+        return None
+
+    step = 1.0 / FPS
+    starts, ends = [], []
+    for a, b in middle:
+        near = window(a - CARD_OFFSET_REACH, a + CARD_EDGE_WINDOW)
+        hit = near[card_distances(frames[near], fp) < CARD_MATCH]
+        if len(hit):
+            starts.append(float(t[hit[0]] - a))
+        near = window(b - CARD_EDGE_WINDOW, b + CARD_OFFSET_REACH)
+        hit = near[card_distances(frames[near], fp) < CARD_MATCH]
+        if len(hit):
+            ends.append(float(t[hit[-1]] + step - b))
+
+    card = {
+        "fingerprint": np.rint(fp).astype(int).tolist(),
+        "edges": len(edges),
+        "matched": int(matched),
+        "clearance": round(clearance, 1),
+        "start": _offset_side(starts),
+        "end": _offset_side(ends),
+    }
+
+    def describe(side, name):
+        if side is None:
+            return f"{name}: not seen"
+        where = ("on the cut" if abs(side["offset"]) <= step
+                 else f"{side['offset']:+.1f}s from the cut")
+        steady = ("steady" if side["spread"] <= CARD_SPREAD_MAX
+                  else f"varies {side['spread']:.1f}s")
+        return f"{name} {where}, {steady} ({side['n']})"
+
+    report.append(f"edge card: matched {matched} of {len(edges)} break "
+                  f"edges, programme no closer than {clearance:.1f}; "
+                  f"{describe(card['start'], 'starts')}, "
+                  f"{describe(card['end'], 'ends')}")
+    return card
+
+
+# How far a card may move a break's edge - and it is not symmetric.
+#
+# GROWING a break toward a card is safe at any reach: the card itself lies in
+# the stretch being claimed, and a learned card never appears in programme
+# (the rule it was learned by).  Run 37 needed more than 10 s for that: on
+# film4-3 a break's end was found 14 s early, its closing ident out of reach.
+#
+# SHRINKING a break is not.  The stretch it hands back holds no card - but
+# the lead-in and the tail are PADDING, trailers and continuity, which hold
+# no card either.  "Not the card" is not "programme".  With a 30 s reach both
+# ways, run 38 shrank three lead-in/tail breaks by 18.5, 25.0 and 29.9 s
+# (itv1-3, itv4, rewindtv-2), leaving padding in; every shrink under 10 s in
+# runs 37 and 38 was a correction (the largest 7.4 s, on Film4).  So a card
+# may grow a break by up to CARD_REACH and shrink it by up to
+# CARD_SHRINK_MAX, the ordinary refinement error it was built to correct.
+CARD_REACH = 30.0
+CARD_SHRINK_MAX = 10.0
+CARD_SCENE_SNAP = 0.75    # a scene change this close marks the exact frame
+
+
+def card_sightings(cards, times, held):
+    """Every run of frames matching one of a channel's learned cards.
+
+    Returns [(start, end, card)] in seconds, end exclusive at the analysis
+    step, sorted by start.  A run is at least one analysis frame long.
+    """
+    t = np.asarray(times)
+    if not held or len(t) == 0:
+        return []
+    frames = np.asarray(cards, dtype=np.float32)
+    step = 1.0 / FPS
+    runs = []
+    for card in held:
+        hit = card_distances(frames, card["fingerprint"]) < CARD_MATCH
+        i, n = 0, len(hit)
+        while i < n:
+            if hit[i]:
+                j = i
+                while j + 1 < n and hit[j + 1]:
+                    j += 1
+                runs.append((float(t[i]), float(t[j]) + step, card))
+                i = j + 1
+            else:
+                i += 1
+    runs.sort(key=lambda r: r[0])
+    return runs
+
+
+def _snap_to_scene(when, scenes):
+    """The scene change nearest `when`, if within CARD_SCENE_SNAP."""
+    best = None
+    for s in scenes:
+        d = abs(s - when)
+        if d <= CARD_SCENE_SNAP and (best is None or d < abs(best - when)):
+            best = s
+    return best if best is not None else when
+
+
+CARD_EDGE_RUN = 2.0       # a card this long can open or close a break
+
+
+def propose_card_breaks(sightings, existing, report):
+    """Breaks found from a channel's card ALONE (item 1u, stage 3 part 2).
+
+    For the case nothing else can see: a full-screen Film4 film has no logo,
+    no picture-shape change, no black frames and no silence at its breaks -
+    every technique proposes nothing - but each break opens and closes with
+    the red ident, and the film never comes near it (43.9 on film4-4, against
+    a match threshold of 8).
+
+    A break is a card sighting of at least CARD_EDGE_RUN seconds followed,
+    MIN_BREAK to MAX_BREAK later, by another; the last such sighting closes
+    it.  The short idents INSIDE a break (1 s, after the sponsor card) can
+    neither open nor close one.  Only cards whose starts AND ends are both
+    steady may do this - the same test that lets a side place an edge - so
+    ITV1's (often end-only) and Sky Mix's (unsteady starts) never do.  A break
+    overlapping one already found is left to place_card_edges().  Edges are
+    the sightings less the learned offsets; place_card_edges() then snaps
+    them to the frame.
+    """
+    def steady(card):
+        return all((card.get(side) or {}).get("spread", 99.0)
+                   <= CARD_SPREAD_MAX for side in ("start", "end"))
+
+    edge = [r for r in sightings
+            if r[1] - r[0] >= CARD_EDGE_RUN and steady(r[2])]
+    found = []
+    i = 0
+    while i < len(edge):
+        opening = edge[i]
+        closing = [r for r in edge[i + 1:]
+                   if MIN_BREAK <= r[1] - opening[0] <= MAX_BREAK]
+        if not closing:
+            i += 1
+            continue
+        last = max(closing, key=lambda r: r[1])
+        a = opening[0] - opening[2]["start"]["offset"]
+        b = last[1] - last[2]["end"]["offset"]
+        if not any(x < b and a < y for x, y in existing):
+            found.append((a, b))
+            report.append(f"card break: {a:.2f}-{b:.2f} ({b - a:.1f}s), "
+                          f"opened and closed by the channel's card")
+        i = edge.index(last) + 1
+    return found
+
+
+def place_card_edges(breaks, sightings, scenes, report):
+    """Move each break's edges to where the channel's card puts them.
+
+    For a break START, the EARLIEST sighting whose start is within CARD_REACH
+    of it; for an END, the LATEST sighting whose end is.  Earliest and latest
+    rather than nearest, because a break can hold the card more than once -
+    Film4 shows its ident again, briefly, just after each sponsor card - and
+    the break begins at its first card and ends at its last.  A side is only
+    used when the card's learned offset for that side is steady (spread
+    within CARD_SPREAD_MAX); the edge is the sighting less that offset,
+    snapped to a scene change within CARD_SCENE_SNAP - the card begins and
+    ends on a hard cut, which the full-rate scene detection has to the frame.
+
+    Never lets a break shrink below MIN_BREAK_STRONG, turn inside out, or
+    run into its neighbour; an edge that would is left where it was.
+    """
+    out = []
+    moves = 0
+    for k, (a, b) in enumerate(breaks):
+        new_a, new_b = a, b
+        starts = [r for r in sightings
+                  if abs(r[0] - a) <= CARD_REACH
+                  and (r[2].get("start") or {}).get("spread", 99.0)
+                  <= CARD_SPREAD_MAX]
+        if starts:
+            first = min(starts, key=lambda r: r[0])
+            new_a = _snap_to_scene(first[0] - first[2]["start"]["offset"],
+                                   scenes)
+        ends = [r for r in sightings
+                if abs(r[1] - b) <= CARD_REACH
+                and (r[2].get("end") or {}).get("spread", 99.0)
+                <= CARD_SPREAD_MAX]
+        if ends:
+            last = max(ends, key=lambda r: r[1])
+            new_b = _snap_to_scene(last[1] - last[2]["end"]["offset"],
+                                   scenes)
+        # Shrinking is limited to CARD_SHRINK_MAX; growing to CARD_REACH.
+        if new_a - a > CARD_SHRINK_MAX:
+            new_a = a
+        if b - new_b > CARD_SHRINK_MAX:
+            new_b = b
+        prev_end = out[-1][1] if out else 0.0
+        next_start = breaks[k + 1][0] if k + 1 < len(breaks) else float("inf")
+        if new_a < prev_end or new_b - new_a < MIN_BREAK_STRONG:
+            new_a = a
+        if new_b > next_start or new_b - new_a < MIN_BREAK_STRONG:
+            new_b = b
+        if new_a != a or new_b != b:
+            moves += (new_a != a) + (new_b != b)
+            report.append(f"card edges: break {a:.2f}-{b:.2f} -> "
+                          f"{new_a:.2f}-{new_b:.2f} "
+                          f"(start {new_a - a:+.2f}s, end {new_b - b:+.2f}s)")
+        out.append((new_a, new_b))
+    return out, moves
+
+
+def add_card(existing, card, project=""):
+    """A channel's card list with `card` added.
+
+    A card matching one already held replaces it - the same ident relearned
+    from a newer project - so the list holds DIFFERENT cards, up to
+    CARD_HISTORY_MAX, oldest dropped first.
+    """
+    card = dict(card)
+    if project:
+        card["learned_from"] = project
+    kept = [c for c in existing
+            if card_distances(np.asarray([c["fingerprint"]], dtype=np.float32),
+                              card["fingerprint"])[0] >= CARD_MATCH]
+    kept.append(card)
+    return kept[-CARD_HISTORY_MAX:]
+
+
+# ---------------------------------------------------------------------------
 # Scoring against a hand-corrected project
 # ---------------------------------------------------------------------------
 
 def parse_vprj(path):
+    """Cuts in seconds, and the recording's duration, from a project.
+
+    Named for the .vprj it was written for; it also reads Snipwright's own
+    .swproj, which carries the same two things - so logo learning, the
+    batch scoring and `--learn-logo` work whichever format the user saves.
+    """
+    if str(path).lower().endswith(".swproj"):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            cuts = sorted(
+                (max(0.0, float(c.get("start", 0))), float(c.get("end", 0)))
+                for c in data.get("cuts") or [] if isinstance(c, dict))
+            source = data.get("source") or {}
+            return cuts, float(source.get("duration") or 0.0)
+        except (OSError, ValueError, TypeError):
+            return [], 0.0
     text = open(path, encoding="utf-8", errors="replace").read()
     cuts = []
     for m in re.finditer(r"<[Cc]ut\b[^>]*>(.*?)</[Cc]ut>", text, re.S):
@@ -4040,6 +4582,14 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
             info["masks_held"] = len(mask_history(entry))
             info["active_count"] = entry.get("count")
             info["active_changed"] = not same_mask(before, entry)
+
+    # An edge card, reported whatever became of the logo: Film4 learns a
+    # card and no logo at all.  detect() has already filed it, in its own
+    # store beside the logo store - see card_store_path().
+    info["card_report"] = detected.get("card_report", [])
+    if detected.get("card_learned") is not None:
+        info["card"] = detected["card_learned"]
+        info["cards_held"] = detected.get("cards_held", 1)
 
     info["report"] = detected.get("learn_report", [])
     if detected.get("learned"):

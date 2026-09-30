@@ -1,4 +1,11 @@
-import os
+# Start-up timing (item 1r).  Taken before anything else is imported, because
+# loading the libraries - Qt above all - is the part of start-up the log could
+# not see: its first line is written after they have all loaded.  On Windows
+# that part has been slow enough to want an installer change, and this is what
+# measures whether any change helps.
+import time as _startup_clock
+_STARTUP_T0 = _startup_clock.perf_counter()
+
 import os
 import sys
 
@@ -157,6 +164,19 @@ log = logging.getLogger("snipwright")
 # dropped and the log says so, because a queue nobody will wait for is not
 # more useful for being longer.
 LEARN_QUEUE_MAX = 8
+
+
+
+def _with_project_extension(path, ext):
+    """`path` with `ext` in place of a project or EDL extension.
+
+    Only .swproj, .vprj and .edl are replaced, so a name that merely contains
+    a dot ("Episode 1.5") keeps it and gets the extension added instead.
+    """
+    root, current = os.path.splitext(path)
+    if current.lower() in (".swproj", ".vprj", ".edl"):
+        return root + ext
+    return path + ext
 
 
 class MainWindow(QMainWindow):
@@ -1048,6 +1068,11 @@ class MainWindow(QMainWindow):
         )
         create_joiner_action.triggered.connect(self.create_joiner_video)
 
+        queue_joiner_action = joiner_menu.addAction(
+            self.tr("Queue Joiner List to Batch")
+        )
+        queue_joiner_action.triggered.connect(self.queue_joiner_to_batch)
+
         tools_menu = (
             self.menuBar()
             .addMenu(
@@ -1607,17 +1632,21 @@ class MainWindow(QMainWindow):
             elif getattr(dialog, "create_requested", False):
                 self.create_joiner_video(
                     clear_after=dialog.clear_after_requested())
+            elif getattr(dialog, "queue_requested", False):
+                self.queue_joiner_to_batch(
+                    clear_after=dialog.clear_after_requested())
         self.info_panel.update_info()
         self.setFocus()
 
-    def create_joiner_video(self, clear_after=False):
-        """Joiner -> Create Video From Joiner List.
+    def _joiner_render_plan(self):
+        """The checks and the one question a join needs before it can run.
 
-        Renders each scene and joins them into one output file (a stream-copy
-        join, for entries that share the same format).
+        Shared by Create Video and Queue to Batch, so both ask exactly the
+        same things.  Returns (entries, reencode_target) - reencode_target is
+        None for a lossless join - or None if the join cannot or should not
+        go ahead (empty list, missing recordings, or the user declined the
+        re-encode).
         """
-        from export.joiner_render import JoinerRenderWorker
-
         entries = list(self.joiner_list.entries)
         if not entries:
             QMessageBox.information(
@@ -1672,8 +1701,70 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
             if resp != QMessageBox.StandardButton.Yes:
-                return
+                return None
             reencode_target = (tw, th, tfps)
+        return entries, reencode_target
+
+    def queue_joiner_to_batch(self, clear_after=False):
+        """Joiner -> Queue Joiner List to Batch.
+
+        The Joiner's equivalent of the editor's Queue to Batch: the list is
+        written, as it stands, into the batch queue's staging folder and added
+        as a job.  The batch renders it with the Joiner's own renderer, using
+        the Batch Manager's profile and output folder like any other job.  The
+        same checks and re-encode question as Create Video come first, and the
+        answer travels with the job, so the batch never has to ask.
+        """
+        import time
+        from batch.controller import staging_dir
+        from project.joiner import (JoinerList, JOINER_EXT, joined_stem,
+                                    save_queued)
+
+        plan = self._joiner_render_plan()
+        if plan is None:
+            return
+        entries, reencode_target = plan
+
+        stem = joined_stem(entries)
+        queue_dir = staging_dir()
+        try:
+            os.makedirs(queue_dir, exist_ok=True)
+            path = os.path.join(
+                queue_dir, "%s - %s%s" % (
+                    stem, time.strftime("%Y%m%d-%H%M%S"), JOINER_EXT))
+            snapshot = JoinerList()
+            snapshot.entries = list(entries)
+            save_queued(path, snapshot, reencode_target)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, self.tr("Queue to Batch"),
+                self.tr("The joiner list could not be queued:\n\n%s") % exc)
+            return
+
+        self.batch_controller.add_job(path)
+        if clear_after:
+            self.joiner_list.clear()
+            self.info_panel.update_info()
+        self.statusBar().showMessage(
+            self.tr("Queued to batch: %(name)s (%(profile)s). "
+                    "Open Tools \u2192 Batch Manager to run it.")
+            % {"name": stem, "profile": self.batch_controller.default_profile},
+            8000,
+        )
+
+    def create_joiner_video(self, clear_after=False):
+        """Joiner -> Create Video From Joiner List.
+
+        Renders each scene and joins them into one output file (a stream-copy
+        join, for entries that share the same format).
+        """
+        from export.joiner_render import JoinerRenderWorker
+        from project.joiner import JoinerEntry
+
+        plan = self._joiner_render_plan()
+        if plan is None:
+            return
+        entries, reencode_target = plan
 
         # Same Save Video dialogue used everywhere else - pick a full output
         # profile (container, video, crop, aspect, audio) and destination in
@@ -1732,74 +1823,118 @@ class MainWindow(QMainWindow):
 
         self._remember_dir("export", out)
 
-        progress = QProgressDialog(self.tr("Preparing…"), self.tr("Cancel"), 0, 100, self)
+        from export.joiner_render import JoinExportAdapter
+        from ui.export_dialogs import ExportProgressDialog
+
+        # The same window a normal export uses - Abort, and Send to Batch
+        # for when a long re-encode is more waiting than you wanted.  The
+        # adapter translates the Joiner's reports into an export's, so the
+        # window and, after a hand-over, the Batch Manager can follow it.
+        progress = ExportProgressDialog(
+            self.tr("Creating %s") % os.path.basename(out), self)
         progress.setWindowTitle(self.tr("Create Joined Video"))
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        # 420 to match the export dialog, which this now sits alongside.
-        # QProgressDialog otherwise sizes itself to whatever text it is showing
-        # at the time, so it opened narrow and then jumped wider the moment the
-        # time estimate appeared - and the estimate is deliberately withheld
-        # for the first few seconds, so the jump was several seconds in.
-        progress.setMinimumWidth(420)
 
         worker = JoinerRenderWorker(
             entries, out, profile, reencode_target, self)
-        self._joiner_worker = worker          # keep a reference while it runs
+        adapter = JoinExportAdapter(worker, self)
+        self._joiner_worker = adapter         # keep a reference while it runs
 
-        # QProgressDialog hides itself the moment Cancel is pressed, and the
-        # next setValue() brings it straight back - so the dialog blinked, the
-        # render carried on, and a second click landed on the video underneath
-        # and toggled playback.  Cancelling is not instant (ffmpeg has to be
-        # stopped and the partial file cleaned up), so the dialog has to stay
-        # up and say what is happening.
-        cancelling = {"yes": False}
-
-        def on_cancel():
-            if cancelling["yes"]:
-                return
-            cancelling["yes"] = True
-            progress.setLabelText(self.tr("Cancelling…"))
-            progress.setCancelButton(None)     # nothing more to click
-            progress.show()                    # undo the automatic hide
-            worker.cancel()
-
-        def on_progress(percent, label):
-            if cancelling["yes"]:
-                return                         # keep "Cancelling…" on screen
-            progress.setLabelText(label)
-            progress.setValue(percent)
-
-        def on_done(path):
+        def on_done(stats):
             from ui.export_dialogs import ExportCompleteDialog
 
             progress.close()
+            path = stats.get("out_path", out)
             self.statusBar().showMessage(
                 self.tr("Joined video created: %s")
                 % os.path.basename(path), 6000)
             if clear_after:
                 self.joiner_list.clear()
+            self._joiner_worker = None
             # The same summary a plain export gets, rather than a one-line
             # box.  A join is the operation where the figures matter most: it
             # can combine several recordings and normalise them to one shape,
             # and the dialog is where that gets reported.
-            stats = getattr(worker, "stats", None) or {"out_path": path}
             ExportCompleteDialog(stats, self).exec()
 
         def on_failed(message):
             progress.close()
-            if message != "Cancelled.":
-                QMessageBox.critical(
-                    self, self.tr("Joiner"),
-                    self.tr("Could not create the joined video:\n\n%s") % (message,))
+            self._joiner_worker = None
+            QMessageBox.critical(
+                self, self.tr("Joiner"),
+                self.tr("Could not create the joined video:\n\n%s") % (message,))
 
-        worker.progress.connect(on_progress)
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_failed)
-        progress.canceled.connect(on_cancel)
-        worker.start()
+        def on_cancelled():
+            progress.close()
+            self._joiner_worker = None
+
+        adapter.progress.connect(progress.update_progress)
+        adapter.finished_ok.connect(on_done)
+        adapter.failed.connect(on_failed)
+        adapter.cancelled.connect(on_cancelled)
+        progress.set_abort_callback(adapter.cancel)
+        progress.set_batch_callback(
+            lambda: self._send_join_to_batch(
+                adapter, entries, reencode_target, profile, out, progress,
+                clear_after))
+        adapter.start()
+        progress.show()
+
+    def _send_join_to_batch(self, adapter, entries, reencode_target, profile,
+                            out_path, progress, clear_after):
+        """Hand a join that is already running to the Batch Manager.
+
+        The join's equivalent of sending an export to the batch: the render
+        carries on untouched - nothing restarts, and the file still lands
+        where you chose - while the Batch Manager takes over reporting it.
+        The list is written into the queue as it would be by Queue to Batch,
+        so the job has something to point at if it ever needs re-running.
+        Returns True if handed over.
+        """
+        import time
+        from batch.controller import staging_dir
+        from project.joiner import (JoinerList, JOINER_EXT, joined_stem,
+                                    save_queued)
+
+        controller = self.batch_controller
+        stem = joined_stem(entries)
+        try:
+            os.makedirs(staging_dir(), exist_ok=True)
+            path = os.path.join(
+                staging_dir(), "%s - %s%s" % (
+                    stem, time.strftime("%Y%m%d-%H%M%S"), JOINER_EXT))
+            snapshot = JoinerList()
+            snapshot.entries = list(entries)
+            save_queued(path, snapshot, reencode_target)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, self.tr("Send to Batch"),
+                self.tr("The joiner list could not be queued:\n\n%s") % exc)
+            return False
+
+        # Take the Joiner's handlers off first: the completion dialog belongs
+        # to a join you are watching, not one finishing in the background.
+        for signal in (adapter.progress, adapter.finished_ok,
+                       adapter.failed, adapter.cancelled):
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+
+        controller.adopt_export(
+            adapter, path, getattr(profile, "name", "") or "", out_path,
+            percent=progress.current_percent(), phase="join",
+        )
+        self._joiner_worker = None
+        if clear_after:
+            self.joiner_list.clear()
+            self.info_panel.update_info()
+        log.info("Join handed to the Batch Manager: %s -> %s", stem, out_path)
+        self.statusBar().showMessage(
+            self.tr("Export moved to the Batch Manager - it carries on in the "
+                    "background. Tools → Batch Manager to watch it."),
+            8000,
+        )
+        return True
 
     def _load_joiner_entry(self, entry):
         """Load a joiner entry back into the editor (the dialog's Edit
@@ -1812,15 +1947,18 @@ class MainWindow(QMainWindow):
             return
 
         import tempfile
-        from project.vprj import save_vprj_from_cuts
+        from project.swproj import save_swproj_from_cuts
 
-        # Write the scene's cut list to a temporary .vprj and load it the same
-        # way Open Project does.  A single reused path is fine: only one Edit
-        # selection can be in flight at a time, and load_project_file reads the
-        # file during its deferred after-index step.
-        tmp = os.path.join(tempfile.gettempdir(), "snipwright-joiner-edit.vprj")
-        save_vprj_from_cuts(
-            tmp, entry.source, entry.cuts, entry.total_duration, entry.fps)
+        # Write the scene's cut list to a temporary project and load it the
+        # same way Open Project does.  Snipwright's own format, as every file
+        # Snipwright writes for itself is.  A single reused path is fine: only
+        # one Edit selection can be in flight at a time, and load_project_file
+        # reads the file during its deferred after-index step.
+        tmp = os.path.join(tempfile.gettempdir(),
+                           "snipwright-joiner-edit.swproj")
+        save_swproj_from_cuts(
+            tmp, entry.source, entry.cuts, entry.total_duration,
+            made_by="person")
         self.load_project_file(tmp, title="Edit Joiner Selection",
                                remember=False)
 
@@ -2055,7 +2193,8 @@ class MainWindow(QMainWindow):
             # than spend minutes decoding to learn nothing - see
             # _project_was_corrected().
             self._proposed_ranges = (self.current_filename,
-                                     list(keep_ranges))
+                                     list(keep_ranges),
+                                     str(name).lower())
 
             # Jump to the start of the first detected scene.
             self.goto_frame(keep_ranges[0][0])
@@ -2091,8 +2230,10 @@ class MainWindow(QMainWindow):
             # writes, and it matched neither of the two globs listed here
             # before - so the files this is most often pointed at were the
             # ones it could not see.
-            "Projects and cut lists (*.vprj *.VPrj *.VPRJ *.edl *.EDL)"
-            ";;Snipwright Project (*.vprj *.VPrj *.VPRJ)"
+            "Projects and cut lists (*.swproj *.vprj *.VPrj *.VPRJ "
+            "*.edl *.EDL)"
+            ";;Snipwright Project (*.swproj)"
+            ";;VideoReDo Project (*.vprj *.VPrj *.VPRJ)"
             ";;EDL cut list (*.edl *.EDL)"
             ";;All files (*)",
         )
@@ -2262,12 +2403,12 @@ class MainWindow(QMainWindow):
         return True
 
     def load_project_file(self, path, title="Import Project", remember=True):
-        """Load a saved .vprj into the editor and make it the current project
+        """Load a saved .swproj or .vprj into the editor and make it the current project
         (so Save Project / Ctrl+P overwrites it).  Shared by Import Project and
         the Batch Manager's per-row Edit button.  remember=False suppresses
         adding it to the Recent list (used for transient internal loads such as
         the Joiner's temporary edit project)."""
-        from project.vprj import load_vprj
+        from project.formats import load_project
 
         # Bring the editor to the front - the Batch Manager may be on top of it.
         self.raise_()
@@ -2280,13 +2421,10 @@ class MainWindow(QMainWindow):
         if remember:
             self._remember_recent(path)
 
-        # Read the project's stored source path first (cheap - just the XML
+        # Read the project's stored source path first (cheap - just the
         # header) so we can find the video before building an index.
         try:
-            import xml.etree.ElementTree as ET
-            root = ET.parse(path).getroot()
-            fn = root.find("Filename")
-            embedded = fn.text.strip() if (fn is not None and fn.text) else ""
+            embedded = self._project_source_path(path)
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -2338,7 +2476,15 @@ class MainWindow(QMainWindow):
         # Load the video, then apply the project's cuts/markers once the index
         # is ready (same deferred-after-load mechanism the QSF reload uses).
         def _apply(new_index):
-            data = load_vprj(path, new_index)
+            data = load_project(path, new_index)
+            if getattr(data, "source_matches", None) is False:
+                # A .swproj knows which recording it was made from; this is
+                # not it (or it has been repaired since), so the cuts were
+                # placed by time rather than by exact frame.  Worth knowing,
+                # not worth stopping for - it is what a .vprj always does.
+                log.info("Project %s was saved against a different copy of "
+                         "the recording; its cuts were placed by time.",
+                         os.path.basename(path))
             self.selection.ranges = list(data.keep_ranges)
             self.scenes.markers = list(data.markers)
             self._refresh_scenes_from_selection()
@@ -2379,6 +2525,31 @@ class MainWindow(QMainWindow):
             self._load_file(source)
         return True
 
+    @staticmethod
+    def _project_source_path(path):
+        """The recording a project names, read from the file's header.
+
+        Raises if the file cannot be read, so the caller can say so.  A
+        .swproj also finds a recording moved together with its project.
+        """
+        if path.lower().endswith(".swproj"):
+            from project import swproj
+            swproj.read(path)                       # raises if unreadable
+            return swproj.read_source_filename(path)
+        import xml.etree.ElementTree as ET
+        root = ET.parse(path).getroot()
+        fn = root.find("Filename")
+        return fn.text.strip() if (fn is not None and fn.text) else ""
+
+    def _cuts_made_by(self):
+        """Who found the cuts being saved: the detector, if they are still
+        exactly what it proposed for this recording, otherwise a person."""
+        proposed = getattr(self, "_proposed_ranges", None)
+        if (proposed and len(proposed) > 2
+                and not self._project_was_corrected(self.current_filename)):
+            return proposed[2]
+        return "person"
+
     def _can_save_project(self, title):
         """Shared guard for the project-save actions."""
         if not self.frames or self.index is None:
@@ -2397,15 +2568,16 @@ class MainWindow(QMainWindow):
     def _write_project(self, path, title):
         """Write the current cuts/markers to path, updating the current
         project and the remembered folder.  Returns True on success."""
-        from project.vprj import save_vprj
+        from project.formats import save_project
 
         try:
-            save_vprj(
+            save_project(
                 path,
                 self.selection.ranges,
                 self.scenes.markers,
                 self.current_filename,
                 self.index,
+                made_by=self._cuts_made_by(),
             )
         except Exception as exc:
             QMessageBox.warning(
@@ -2432,7 +2604,7 @@ class MainWindow(QMainWindow):
         best-effort and quiet: the export itself is the real save point, so if
         the project can't be written we don't nag or block - we just skip it.
         """
-        from project.vprj import save_vprj
+        from project.formats import default_extension, save_project
 
         try:
             path = self.current_project_path
@@ -2445,14 +2617,16 @@ class MainWindow(QMainWindow):
                     )
                 os.makedirs(project_dir, exist_ok=True)
                 base = self._original_base()
-                path = os.path.join(project_dir, f"{base}.vprj")
+                path = os.path.join(
+                    project_dir, base + default_extension(self.config))
 
-            save_vprj(
+            save_project(
                 path,
                 self.selection.ranges,
                 self.scenes.markers,
                 self.current_filename,
                 self.index,
+                made_by=self._cuts_made_by(),
             )
 
             self.current_project_path = path
@@ -2529,7 +2703,7 @@ class MainWindow(QMainWindow):
             return
         if not self.current_filename or not vprj_path:
             return
-        if not vprj_path.lower().endswith(".vprj"):
+        if not vprj_path.lower().endswith((".vprj", ".swproj")):
             return
         # One learn at a time, but the rest are QUEUED rather than dropped.
         #
@@ -2693,6 +2867,15 @@ class MainWindow(QMainWindow):
                 log.info("Chalkline analysed %d frames", got)
         for line in info.get("report") or []:
             log.info("Chalkline logo candidate: %s", line)
+        # The edge card (item 1u): learned whatever became of the logo -
+        # Film4 has no logo and a card, so its learning pass ends "no logo
+        # clear enough to remember" and still has something to say here.
+        for line in info.get("card_report") or []:
+            log.info("Chalkline %s", line)
+        if info.get("card") is not None:
+            log.info("Chalkline remembered an edge card for %s (%d held)",
+                     info.get("channel", "this channel"),
+                     info.get("cards_held", 1))
 
     def _on_learn_started(self, channel):
         """Show that learning has begun, and keep showing it.
@@ -2784,6 +2967,7 @@ class MainWindow(QMainWindow):
     def save_project_as(self):
         """Prompt for a file and save the project there (VRD's Ctrl+Shift+P).
         Returns True on a successful save."""
+        from project.formats import default_extension
         if not self._can_save_project("Save Project As"):
             return False
 
@@ -2796,34 +2980,72 @@ class MainWindow(QMainWindow):
             start = self._start_dir("project")
             if not start:
                 start = os.path.dirname(self.current_filename)
-            suggested = os.path.join(start, f"{base}.vprj")
+            suggested = os.path.join(
+                start, base + default_extension(self.config))
 
-        path, chosen = QFileDialog.getSaveFileName(
-            self,
-            self.tr("Save Project As"),
-            suggested,
-            "Snipwright Project (*.vprj);;EDL cut list (*.edl)",
-        )
+        swproj_filter = "Snipwright Project (*.swproj)"
+        vprj_filter = "VideoReDo Project (*.vprj)"
+        edl_filter = "EDL cut list (*.edl)"
+        extension_of = {swproj_filter: ".swproj", vprj_filter: ".vprj",
+                        edl_filter: ".edl"}
+        # Preselect the format of the project being saved over, else the
+        # one chosen in Settings.
+        preselect = (vprj_filter
+                     if suggested.lower().endswith(".vprj") else swproj_filter)
 
+        # Built here rather than with the one-step getSaveFileName(), which
+        # gives nothing back until Save is pressed: choosing another format
+        # has to change the extension in the name box as it happens, as the
+        # Save Video dialog does.  Qt passes this through to the desktop's
+        # own dialog on both Linux and Windows; whether a native dialog
+        # honours a name change while it is open is up to the desktop, and
+        # the check after Save below makes the file right either way.
+        dialog = QFileDialog(self, self.tr("Save Project As"))
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setNameFilters([swproj_filter, vprj_filter, edl_filter])
+        dialog.selectNameFilter(preselect)
+        dialog.setDirectory(os.path.dirname(suggested))
+        dialog.selectFile(os.path.basename(suggested))
+
+        def on_format_chosen(name_filter):
+            ext = extension_of.get(name_filter)
+            if not ext:
+                return
+            shown = dialog.selectedFiles()
+            current = shown[0] if shown else suggested
+            changed = _with_project_extension(current, ext)
+            if changed != current:
+                dialog.selectFile(os.path.basename(changed))
+
+        dialog.filterSelected.connect(on_format_chosen)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        files = dialog.selectedFiles()
+        path = files[0] if files else ""
+        chosen = dialog.selectedNameFilter()
         if not path:
             return False
+
+        # The format chosen in the dialog decides, whatever the name says.
+        # Before, the choice was only used when the name had NO extension -
+        # and it always had one, because one is suggested - so choosing
+        # VideoReDo with the name still ending .swproj saved a Snipwright
+        # project, and choosing EDL saved "name.swproj.edl".  A project or
+        # EDL extension on the name is replaced; any other text is kept.
+        ext = extension_of.get(chosen)
+        if ext is None:
+            known = os.path.splitext(path)[1].lower()
+            ext = (known if known in (".swproj", ".vprj", ".edl")
+                   else default_extension(self.config))
+        path = _with_project_extension(path, ext)
 
         # Export rather than save.  An EDL holds cut times and nothing else,
         # so it is offered here as a second format instead of as its own menu
         # entry - but it does not become the current project, because saving
         # to it again from Ctrl+P would drop the markers silently.
-        wants_edl = (
-            "*.edl" in (chosen or "")
-            or (not chosen and path.lower().endswith(".edl"))
-        )
-        if wants_edl:
-            if not path.lower().endswith(".edl"):
-                path += ".edl"
+        if ext == ".edl":
             return self._write_edl(path, "Save Project As")
-
-        if not path.lower().endswith(".vprj"):
-            path += ".vprj"
-
         return self._write_project(path, "Save Project As")
 
     def _write_edl(self, path, title):
@@ -3411,7 +3633,7 @@ class MainWindow(QMainWindow):
 
     # Accepted extensions for drag-and-drop (lower-case, with the dot).
     _DND_EXTS = (".ts", ".m2ts", ".mkv", ".mp4", ".mov", ".avi", ".mpg",
-                 ".mpeg", ".vprj", ".edl")
+                 ".mpeg", ".vprj", ".swproj", ".edl")
 
     def _dropped_paths(self, mime):
         """Local file paths from a drop's MIME data whose extensions we accept,
@@ -3447,7 +3669,7 @@ class MainWindow(QMainWindow):
         if len(paths) == 1:
             path = paths[0]
             self._remember_dir("open", path)
-            if path.lower().endswith(".vprj"):
+            if path.lower().endswith((".vprj", ".swproj")):
                 self.load_project_file(path)
             elif path.lower().endswith(".edl"):
                 self.load_edl_file(path)
@@ -3456,7 +3678,7 @@ class MainWindow(QMainWindow):
             return
 
         videos = [p for p in paths
-                  if not p.lower().endswith((".vprj", ".edl"))]
+                  if not p.lower().endswith((".vprj", ".swproj", ".edl"))]
         if len(videos) == 1:
             self._remember_dir("open", videos[0])
             self._open_video_path(videos[0])
@@ -3562,7 +3784,7 @@ class MainWindow(QMainWindow):
             if not exists:
                 act.setEnabled(False)
                 continue
-            if path.lower().endswith(".vprj"):
+            if path.lower().endswith((".vprj", ".swproj")):
                 act.triggered.connect(
                     lambda checked=False, p=path: self.load_project_file(p)
                 )
@@ -4025,7 +4247,7 @@ class MainWindow(QMainWindow):
         Shared by Queue to Batch and by handing a running export over to the
         Batch Manager, so both stage projects the same way.
         """
-        from project.vprj import save_vprj
+        from project.formats import save_project
         from batch.controller import staging_dir
 
         # The same helper the controller's cleanup uses to decide what is ours
@@ -4042,15 +4264,20 @@ class MainWindow(QMainWindow):
             return None
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        vprj_path = os.path.join(queue_dir, f"{base} - {stamp}.vprj")
+        # Always Snipwright's own format, whatever Settings chooses for the
+        # user's projects: this file is Snipwright talking to itself, and a
+        # .swproj carries exact frame numbers, so the batch cuts exactly
+        # where the editor showed - even on a recording whose clock jumps.
+        vprj_path = os.path.join(queue_dir, f"{base} - {stamp}.swproj")
 
         try:
-            save_vprj(
+            save_project(
                 vprj_path,
                 keep_ranges,
                 self.scenes.markers,
                 source,
                 self.index,
+                made_by=self._cuts_made_by(),
             )
         except Exception as exc:
             QMessageBox.warning(
@@ -4093,7 +4320,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        from project.vprj import save_vprj
         from config.loader import CONFIG_DIR
 
         # Reference the file we're working from: the QSF'd /tmp copy when one is
@@ -6900,6 +7126,8 @@ class _SlowTooltipStyle(QProxyStyle):
                 painter.restore()
 
 
+_STARTUP_LIBRARIES = _startup_clock.perf_counter()
+
 app = QApplication(
     sys.argv
 )
@@ -7064,6 +7292,27 @@ except Exception:
 
 window.show()
 
+
+def _log_startup_time():
+    """How long start-up took, once the window is actually on screen.
+
+    Runs from the event loop's first pass, after the window has been shown.
+    "Loading libraries" is from the first line of this file to the end of its
+    imports; "building the window" is the rest.  Whether this Python is a
+    virtualenv is logged with it, so installs can be compared from the logs.
+    """
+    now = _startup_clock.perf_counter()
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    log.info(
+        "Start-up took %.1fs to the window (loading libraries %.1fs, "
+        "building the window %.1fs); Python %s from %s (%s)",
+        now - _STARTUP_T0, _STARTUP_LIBRARIES - _STARTUP_T0,
+        now - _STARTUP_LIBRARIES, sys.version.split()[0], sys.executable,
+        "virtualenv" if in_venv else "system-wide")
+
+
+QTimer.singleShot(0, _log_startup_time)
+
 # Open a file passed on the command line (e.g. "Open with Snipwright" from the
 # file manager, which the .desktop entry forwards via %f).  A video opens in
 # the editor; a .vprj/.edl project loads its video and cuts.  Anything we don't
@@ -7140,7 +7389,7 @@ def _open_launch_argument(path=None):
         return
     ext = os.path.splitext(path)[1].lower()
     try:
-        if ext == ".vprj":
+        if ext in (".vprj", ".swproj"):
             # A project carries its own source video and cuts.
             window.load_project_file(path)
         elif ext == ".edl":

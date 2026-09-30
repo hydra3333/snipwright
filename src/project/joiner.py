@@ -214,3 +214,79 @@ class JoinerList:
         joiner = cls()
         joiner.load_into(path, append=False)
         return joiner
+
+
+# --------------------------------------------------------------------------- #
+# A Joiner list queued as a batch job
+# --------------------------------------------------------------------------- #
+#
+# "Queue to batch" from the Joiner writes the list, as it stands, into the
+# batch queue's staging folder - the same file format as Save list, plus a
+# "batch" section recording the choice the user made when queueing (whether
+# the join must be re-encoded, and to what), so the batch never has to ask.
+# The batch runner recognises the job by its extension and hands it to the
+# Joiner's own renderer.
+
+def joined_stem(entries):
+    """The name a joined video is given: the first scene's recording name
+    with " - Joined", as Create Video suggests; "Joined Video" if the list
+    holds only title cards."""
+    for entry in entries:
+        if entry.kind != JoinerEntry.KIND_TITLE and entry.source:
+            return "%s - Joined" % (
+                os.path.splitext(os.path.basename(entry.source))[0],)
+    return "Joined Video"
+
+
+def first_scene_source(entries):
+    """The first real recording in the list, or "" if there is none."""
+    for entry in entries:
+        if entry.kind != JoinerEntry.KIND_TITLE and entry.source:
+            return entry.source
+    return ""
+
+
+def save_queued(path, joiner_list, reencode_target=None):
+    """Write `joiner_list` as a queued batch job, with the re-encode decision
+    made when it was queued: None for a lossless join, or (w, h, fps)."""
+    data = joiner_list.to_dict()
+    data["batch"] = {
+        "reencode_target": list(reencode_target) if reencode_target else None,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(tmp, path)
+
+
+def read_queued(path):
+    """(entries, reencode_target) from a queued join."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    entries = [JoinerEntry.from_dict(d) for d in data.get("entries", [])]
+    target = (data.get("batch") or {}).get("reencode_target")
+    if target and len(target) == 3:
+        target = (int(target[0]), int(target[1]), float(target[2]))
+    else:
+        target = None
+    return entries, target
+
+
+def queued_name_path(path):
+    """A path that NAMES a queued join, for the batch's output naming and
+    display: "<first recording> - Joined" beside the first recording, with
+    its extension. It is not a file and is never opened.
+
+    The batch finds "the recording a job is for" in several places - to name
+    the output, to show where it is working from, and to spot a recording
+    queued twice. A join has several recordings, so this gives those places
+    one sensible answer: named like Create Video would name it, and never
+    equal to a real recording, so it cannot be mistaken for a duplicate."""
+    try:
+        entries, _ = read_queued(path)
+    except (OSError, ValueError):
+        return ""
+    first = first_scene_source(entries)
+    ext = os.path.splitext(first)[1] if first else ".ts"
+    folder = os.path.dirname(first) if first else os.path.dirname(path)
+    return os.path.join(folder, joined_stem(entries) + (ext or ".ts"))
