@@ -79,10 +79,13 @@ fi
 # --- 2. virtual environment + Python dependencies -------------------------
 say "2/4  Virtual environment"
 
-# Snipwright runs on Python 3.12 (Linux Mint 22's system Python).  Prefer an
-# explicit python3.12 if present, so the venv is built on it even where the
-# default python3 is something else; fall back to python3 otherwise.
-BUILD_PY="$(command -v python3.12 || command -v python3 || true)"
+# Snipwright needs Python 3.12, 3.13 or 3.14 - the range the locked versions
+# in requirements.txt are built for.  Linux Mint 22's system Python is 3.12.
+# Prefer an explicit python3.12 (then 3.13, 3.14) if present, so the venv is
+# built on a suitable one even where the default python3 is something else;
+# fall back to python3 otherwise, and check it below.
+BUILD_PY="$(command -v python3.12 || command -v python3.13 || command -v python3.14 \
+            || command -v python3 || true)"
 if [ -z "$BUILD_PY" ]; then
     info "No python3 found on PATH - install Python 3.12 and re-run."
     exit 1
@@ -102,8 +105,40 @@ fi
 
 PY="$VENV/bin/python"
 
+# Check the environment's Python is one the locked versions support.  Without
+# this, an older system (Linux Mint 21 has Python 3.10) fails part-way through
+# with a pip error about "no matching distribution", which says nothing useful.
+VENV_VER="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+case "$VENV_VER" in
+    3.12|3.13|3.14) ;;
+    *)
+        info "Snipwright needs Python 3.12, 3.13 or 3.14, but this environment"
+        info "uses Python $VENV_VER."
+        case "$PY_VER" in
+            3.12|3.13|3.14)
+                # The system has a suitable Python; the environment is just old.
+                info "It was made earlier on another Python.  Remove it and re-run,"
+                info "and it will be rebuilt on Python $PY_VER:"
+                ;;
+            *)
+                info "Install a supported Python first (Linux Mint 22 and later"
+                info "include 3.12), then remove the environment and re-run:"
+                ;;
+        esac
+        info "    rm -rf \"$VENV\""
+        exit 1
+        ;;
+esac
+
 info "Installing the Python dependencies into the environment…"
 "$PY" -m pip install --upgrade pip
+
+# The known package set, used if requirements.txt is missing.  Locked to the
+# exact versions Snipwright is tested with, as in requirements.txt - keep the
+# two in step.  PyAV 19 broke every export on a fresh install the day after it
+# was published, because nothing stopped pip taking it.
+KNOWN_DEPS=("PySide6==6.11.1" "av==18.1.0" "numpy==2.5.1" "bitstring==4.4.0"
+            "bitarray==3.9.2" "tibs==0.5.7" "tqdm==4.70.0")
 
 # Install the dependencies.  Prefer requirements.txt, fall back to the known
 # set.  We do NOT hide pip's output or let a failure pass silently - a partial
@@ -114,7 +149,7 @@ install_deps() {
         "$PY" -m pip install -r "$REQ"
     else
         info "requirements.txt not found at $REQ - installing the known set instead."
-        "$PY" -m pip install PySide6 av numpy bitstring tqdm
+        "$PY" -m pip install "${KNOWN_DEPS[@]}"
     fi
 }
 install_deps
@@ -128,8 +163,7 @@ if ! "$PY" -c 'import PySide6, av, numpy, bitstring, tqdm' >/dev/null 2>&1; then
     if [ -f "$REQ" ]; then
         "$PY" -m pip install --force-reinstall --no-cache-dir -r "$REQ"
     else
-        "$PY" -m pip install --force-reinstall --no-cache-dir \
-            PySide6 av numpy bitstring tqdm
+        "$PY" -m pip install --force-reinstall --no-cache-dir "${KNOWN_DEPS[@]}"
     fi
 fi
 

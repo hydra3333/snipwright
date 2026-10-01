@@ -63,11 +63,16 @@ distilling the part many people relied on most into a free, open-source tool.
   Mint, so Linux is the best-supported platform. Windows has had limited
   testing — it installs and runs — and macOS has had none at all, though
   there's no reason it shouldn't work. See [Status](#status) for the caveats.
-- **Python 3.10 or newer.**
+- **Python 3.12, 3.13 or 3.14.** Linux Mint 22 and later include 3.12; the
+  Windows installer fetches 3.14 if needed.
 - **Python packages:** PySide6, PyAV (`av`), numpy, bitstring, tqdm — see
-  [`requirements.txt`](requirements.txt).
+  [`requirements.txt`](requirements.txt). Each is locked to the exact version
+  Snipwright is tested with, so a new release of one of them can't break an
+  install; newer versions are adopted once they've been tried.
 - **External tools:**
-  - **ffmpeg** — required (PyAV builds against it for decoding/muxing).
+  - **ffmpeg** — required. Snipwright runs it directly to inspect recordings
+    and for some export steps. (PyAV brings its own copy of FFmpeg for
+    decoding, so the two versions don't need to match.)
   - **mkvmerge** (from MKVToolNix) — required only for MKV output.
   - **Comskip** — optional. Snipwright detects adverts with its own built-in
     Chalkline detector by default, so you only need Comskip if you would
@@ -133,7 +138,8 @@ If you'd rather set things up yourself:
 git clone https://github.com/infidelus/snipwright.git
 cd snipwright
 
-# A virtual environment is recommended but not required:
+# A virtual environment is recommended, so the locked package versions
+# don't clash with anything else you've installed (use Python 3.12-3.14):
 python3 -m venv .venv
 source .venv/bin/activate
 

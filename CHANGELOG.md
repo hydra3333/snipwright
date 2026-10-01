@@ -6,6 +6,32 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.9.1] - 2026-10-01
+
+### Fixed
+
+- **A fresh install could not export anything.** Snipwright's installers
+  asked for the newest version of each Python library it uses, and on 29
+  September 2026 a new major version of PyAV - the library that reads and
+  writes the video - was published. It no longer accepts an option
+  Snipwright uses when opening every recording, so anyone who installed
+  Snipwright from that day on got a copy that failed on every export. Every
+  library is now locked to the exact version Snipwright has been tested
+  with, so a new release of something it depends on can no longer break it
+  overnight; newer versions are adopted once they have been tried. If you
+  installed or reinstalled Snipwright since 29 September, run the installer
+  again: it puts the right versions back, and your settings are untouched.
+
+### Changed
+
+- **Snipwright now needs Python 3.12, 3.13 or 3.14.** These are the versions
+  the locked libraries are built for, and in practice what a working
+  install has needed for some time; the documentation said 3.10. Linux
+  Mint 22 and later include 3.12, and the Windows installer fetches 3.14 if
+  it doesn't find a suitable Python. Both installers now say plainly when
+  the Python available isn't one of these, instead of stopping on an
+  unhelpful error part-way through.
+
 ## [2.9.0] - 2026-09-30
 
 ### Added

@@ -49,14 +49,26 @@ Info "Project root: $Root"
 # Store, so a plain Get-Command check is misled by them.  The 'py' launcher is
 # preferred because the Store stub can't shadow it, and we confirm real Python
 # by checking the version output looks like "Python 3.x".
+#
+# Only Python 3.12, 3.13 or 3.14 counts: those are the versions the locked
+# packages in requirements.txt are built for, and pip fails on anything else
+# with an unhelpful "no matching distribution" error.  An unsuitable Python is
+# treated as no Python at all, so step 1 installs 3.14 through winget.  Keep
+# this range in step with requirements.txt.
 function Get-PythonCmd {
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        $v = (& py -3 --version 2>&1) -join " "
-        if ($v -match "Python \d") { return [pscustomobject]@{ Exe = "py"; Pre = @("-3") } }
+        foreach ($minor in @("3.14", "3.13", "3.12")) {
+            $v = (& py "-$minor" --version 2>&1) -join " "
+            if ($v -match "^Python 3\.(12|13|14)\b") {
+                return [pscustomobject]@{ Exe = "py"; Pre = @("-$minor") }
+            }
+        }
     }
     if (Get-Command python -ErrorAction SilentlyContinue) {
         $v = (& python --version 2>&1) -join " "
-        if ($v -match "Python \d") { return [pscustomobject]@{ Exe = "python"; Pre = @() } }
+        if ($v -match "^Python 3\.(12|13|14)\b") {
+            return [pscustomobject]@{ Exe = "python"; Pre = @() }
+        }
     }
     return $null
 }
@@ -76,7 +88,7 @@ $py = Get-PythonCmd
 if ($py) {
     Info "Python found ($($py.Exe) $($py.Pre))."
 } elseif ($haveWinget) {
-    Info "Python not installed (the Microsoft Store alias doesn't count) - installing via winget..."
+    Info "No Python 3.12, 3.13 or 3.14 found (the Microsoft Store alias doesn't count) - installing 3.14 via winget..."
     try {
         winget install --id Python.Python.3.14 -e --accept-source-agreements `
             --accept-package-agreements | Out-Null
@@ -86,7 +98,7 @@ if ($py) {
     if ($py) { Info "Python installed ($($py.Exe) $($py.Pre))." }
     else     { Warn "Python still isn't usable - see the note in step 2." }
 } else {
-    Warn "Python is missing and winget isn't available - install Python from python.org, then re-run."
+    Warn "Python 3.12, 3.13 or 3.14 is needed and winget isn't available - install Python 3.14 from python.org, then re-run."
 }
 
 # ffmpeg + mkvmerge - a plain presence check is fine (no Store aliases here).
@@ -109,7 +121,8 @@ Refresh-Path
 # --- 2. virtual environment + dependencies -------------------------------
 Section "2/3  Python environment"
 if (-not $py) {
-    Warn "No usable Python was found.  If typing 'python' opens the Microsoft"
+    Warn "No usable Python was found - Snipwright needs 3.12, 3.13 or 3.14."
+    Warn "If typing 'python' opens the Microsoft"
     Warn "Store, turn off the aliases at Settings > Apps > Advanced app settings"
     Warn "> App execution aliases (python.exe and python3.exe), or install Python"
     Warn "from python.org, then run this script again."
@@ -129,6 +142,17 @@ if (-not (Test-Path $venvPy)) {
     Warn "Check the messages above and try again."
     Pause-Exit; return
 }
+# A reused environment may have been made earlier on a Python the locked
+# packages don't support.  Say so plainly rather than let pip fail on it.
+$venvVer = (& $venvPy -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null) -join ""
+if ($venvVer -notin @("3.12", "3.13", "3.14")) {
+    Warn "Snipwright needs Python 3.12, 3.13 or 3.14, but the existing virtual"
+    Warn "environment uses Python $venvVer.  Delete this folder and run the script"
+    Warn "again, and it will be rebuilt on a suitable Python:"
+    Warn "    $Venv"
+    Pause-Exit; return
+}
+
 # pythonw.exe (windowless) isn't created by every venv/Python build.  If it's
 # missing, fall back to python.exe for the shortcut target - a console window
 # will flash, but the app launches, which is far better than a dead shortcut
@@ -141,6 +165,14 @@ if (-not (Test-Path $venvPyw)) {
 Info "Installing Python dependencies (this can take a minute)..."
 & $venvPy -m pip install --upgrade pip
 
+# The known package set, used if requirements.txt is missing or empty.
+# Locked to the exact versions Snipwright is tested with, as in
+# requirements.txt - keep the two in step.  PyAV 19 broke every export on a
+# fresh install the day after it was published, because nothing stopped pip
+# taking it.
+$knownDeps = @("PySide6==6.11.1", "av==18.1.0", "numpy==2.5.1", "bitstring==4.4.0",
+               "bitarray==3.9.2", "tibs==0.5.7", "tqdm==4.70.0")
+
 # Install dependencies.  A requirements.txt that's empty or missing (it has
 # been seen to extract as 0 bytes) would make "pip install -r" a silent no-op,
 # leaving a venv that can't import anything - so treat an empty file as absent
@@ -149,7 +181,7 @@ $useReq = (Test-Path $Req) -and ((Get-Item $Req).Length -gt 0)
 if ($useReq) {
     & $venvPy -m pip install -r "$Req"
 } else {
-    & $venvPy -m pip install PySide6 av numpy bitstring tqdm
+    & $venvPy -m pip install @knownDeps
 }
 
 # Verify the dependencies actually import.  A reused venv from a previously
@@ -159,7 +191,7 @@ if ($useReq) {
 & $venvPy -c "import PySide6, av, numpy, bitstring, tqdm" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Warn "Some dependencies are missing or incomplete - reinstalling cleanly..."
-    & $venvPy -m pip install --force-reinstall --no-cache-dir PySide6 av numpy bitstring tqdm
+    & $venvPy -m pip install --force-reinstall --no-cache-dir @knownDeps
 }
 & $venvPy -c "import PySide6, av, numpy, bitstring, tqdm" 2>$null
 if ($LASTEXITCODE -ne 0) {
