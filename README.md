@@ -130,6 +130,15 @@ the script.
 
 See [`src/packaging/README.md`](src/packaging/README.md) for details.
 
+### Uninstalling
+
+Run the uninstaller beside the installer - `bash src/packaging/uninstall-linux.sh`
+on Linux, or double-click `src/packaging/uninstall-windows.bat` on Windows -
+then delete the Snipwright folder. It asks before removing your settings
+(learned channel logos included, in case you reinstall), and never touches
+recordings, exports, projects or logs. Details are in
+[`src/packaging/README.md`](src/packaging/README.md#uninstalling).
+
 ### Manual installation
 
 If you'd rather set things up yourself:

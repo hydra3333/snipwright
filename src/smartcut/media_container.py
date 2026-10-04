@@ -7,6 +7,7 @@ import numpy as np
 
 from smartcut.latm import LatmError, LatmRepacketiser
 from smartcut.lazy_packets import LazyAudioPackets
+from smartcut.open_options import SOURCE_OPEN_OPTIONS
 from av import AudioStream, Packet, VideoStream
 from av import open as av_open
 from av import time_base as AV_TIME_BASE
@@ -214,7 +215,8 @@ class MediaContainer:
         frame_pts = []
         self.video_keyframe_indices = []
 
-        self.av_container = av_container = av_open(path, 'r', metadata_errors='ignore')
+        self.av_container = av_container = av_open(
+            path, 'r', metadata_errors='ignore', options=SOURCE_OPEN_OPTIONS)
 
         self.chat_url = None
         self.chat_history = None

@@ -69,6 +69,7 @@
   @media screen {
     .gimg { width: 100%; height: auto; }
     .m800 { max-width: 800px; }
+    .m780 { max-width: 780px; }
     .m762 { max-width: 762px; }
     .m660 { max-width: 660px; }
     .m640 { max-width: 640px; }
@@ -155,7 +156,10 @@ virtual environment, and menu/desktop shortcuts, so you can start it from your
 applications menu like any other program. On Windows it also offers to exclude
 Snipwright's own Python folder from Windows Defender, which makes the first start after a
 reboot noticeably faster; it explains the trade-off first, and only does it if you say
-yes. See the <code>README</code> there for details.</div>
+yes. To remove Snipwright again, run <code>uninstall-linux.sh</code> or
+<code>uninstall-windows.bat</code> from the same folder: it asks before deleting your
+settings, and never touches your recordings, projects, exported videos or logs. See the
+<code>README</code> there for details.</div>
 
 <h2 id="cutting">3. Marking and cutting</h2>
 <h3>Two ways of working: Cut Mode and Scene Mode</h3>
@@ -360,8 +364,18 @@ would have invented, and marks the one in use. Renaming a
 logo onto a name that already has one joins the two and keeps both logos, leaving the
 channel using the one it already had until your next corrected project settles which is
 better.</p>
-<p align="center" class="figrow"><img class="gimg m660" src="img/chalkline.png" width="660" height="452" alt="The Remembered logos dialog, listing learned channel logos"></p>
-<p align="center" class="cap">Logos Chalkline has learned. The top three rows carry both a channel name and a service ID, so recordings from either kind of recorder are matched to the same logo; the fourth has a name only.</p>
+<p>Channels without a logo are listed too. Film4, for example, shows no logo, so Chalkline
+recognises its breaks by the ident shown at their edges instead; its row shows a small
+picture of that ident and &ldquo;No logo&rdquo; in the Mask column. The Idents column counts
+the idents each channel has learned. A row's Channel and Service ID can be filled in and
+joined exactly as for a logo, so idents learned from one recorder's recordings are used for
+the other's too.</p>
+<p>Untick <strong>Learn</strong> for a channel that already detects well. Everything it has
+learned is still used to find its breaks, but saving a corrected project on that channel no
+longer starts a learning pass, which can take a few minutes on a long recording. Tick it
+again if the channel changes its logo or idents.</p>
+<p align="center" class="figrow"><img class="gimg m780" src="img/chalkline.png" width="780" height="452" alt="The Remembered logos dialog, listing learned channel logos"></p>
+<p align="center" class="cap">Logos Chalkline has learned. Every row carries both a channel name and a service ID, so recordings from either kind of recorder are matched to the same logo. Learning is switched off for Channel 4 HD, and LEGEND has learned a break ident as well as its logo.</p>
 <div class="note">The drawing is not there to let you recognise the brand; it is far too
 small for that. What it shows is whether the mask is a coherent blob or a handful of
 scattered fragments, and how large it is compared with the others &mdash; which is the
@@ -582,7 +596,12 @@ the same Save Video dialogue and output profiles as a normal save. Scenes that s
 format are joined losslessly by stream copy &mdash; an MKV gets a chapter at each join
 &mdash; while a mix of formats is re-encoded to a common one (Snipwright recommends
 suitable settings). Title cards and fades apply during a re-encoded join, so adding them
-to otherwise matching clips trades a little speed and quality for the effect.</p>
+to otherwise matching clips trades a little speed and quality for the effect. Broadcast
+(DVB) subtitles are kept either way: in a re-encoded join, a scene whose subtitles were drawn
+for a different picture size has them redrawn to fit, so they show in every player, and a
+Blu-ray's subtitles are converted to the same kind, so recordings and disc rips share one
+subtitle track. Anything that still cannot be carried, such as teletext, is named in the
+summary at the end.</p>
 <p><strong>Joiner &rarr; Queue Joiner List to Batch</strong>, or <strong>Queue to batch</strong>
 in the Joiner list window, does the same join later, in the Batch Manager, rather than now.
 The same checks and the same re-encode question come first, and your answer is kept with

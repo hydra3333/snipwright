@@ -6,6 +6,83 @@ All notable changes to Snipwright are documented here. Releases before
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.10.0] - 2026-10-04
+
+### Added
+
+- **Uninstallers for Linux and Windows**, beside the installers in
+  `src/packaging`. They remove what the installer set up - menu entries or
+  shortcuts, Snipwright's file types for `.vprj` and `.swproj`, the Watcher's
+  start-on-login entry and the Python environment - plus Snipwright's cache and
+  temporary files, and on Windows the Defender exclusion if one was added. They
+  ask before deleting Quick Stream Fix working copies and your settings, so
+  learned channel logos can be kept for a reinstall, and they never touch
+  recordings, exported videos, projects or logs. If another copy of Snipwright
+  is installed, its menu entries and file types are left alone.
+- **Learning can be switched off per channel.** The Remembered logos window
+  has a new Learn column. Untick it for a channel that already detects well:
+  everything it has learned is still used to find its breaks, but saving a
+  corrected project on it no longer starts a learning pass, which could take
+  several minutes on a long recording.
+- **Channels without a logo now appear in Remembered logos.** A channel
+  recognised only by the ident at the edges of its breaks, such as Film4,
+  gets its own row with a picture of that ident, and its name and service ID
+  can be filled in and joined like any other row - so idents learned from
+  one recorder's recordings are used for the other's too. A new Idents column
+  shows how many idents each channel has learned.
+- **The About box lists what Snipwright is running on.** Your system, Python,
+  each library with its version - including the FFmpeg built into PyAV, which
+  does the decoding - and the FFmpeg and MKVToolNix programs. A library that
+  differs from the version Snipwright was tested with is marked, so if other
+  software has updated one you can see it at a glance. "Copy details" puts
+  the whole list on the clipboard, ready to paste into a bug report.
+- **Advert detection finds where a programme starts and ends more closely.**
+  Many channels show the same frame - a sponsor card, a continuity board -
+  just before or after every programme. Chalkline now learns these from the
+  projects you correct, alongside each channel's logo and idents, and uses
+  them to pull the start and end of the programme in to the right place.
+  Across the test recordings, programme edges within two seconds of the
+  hand-placed cut rose from 25 of 67 to 30, none got worse, and scanning is
+  no slower. It only refines edges Chalkline has already found, and it only
+  learns from recordings whose padding you've trimmed, so recordings without
+  padding are left as they were. Unticking Learn for a channel stops this
+  learning too.
+- **Re-encoded joins keep their subtitles.** Joining scenes that don't match -
+  an SD and an HD recording, say - re-encodes them, and until now their
+  broadcast subtitles were dropped. They are now carried into the joined
+  video, each on the right picture. Where a scene's subtitles were drawn for
+  a different picture size from the joined video, they are redrawn to fit,
+  words and colours unchanged, so they show in every player - including a
+  web browser through Jellyfin, which otherwise lost them. A Blu-ray's
+  subtitles are converted to the same broadcast kind, so a join of
+  recordings and disc rips keeps them all in one subtitle track. Anything
+  that still can't be carried, such as teletext, is named in the summary at
+  the end.
+
+### Fixed
+
+- **Audio description is no longer lost from some HD recordings.** On
+  channels such as BBC Three HD, the audio description track can give no
+  clue to its format during the first minutes of a recording, and the export
+  left it out ("1 audio track could not be carried over"). Where such a
+  track did survive, the last step - restoring the channel name and track
+  labels on a .ts - could fail. Recordings are now read deeply enough to see
+  these tracks properly from the start, so they are kept whole, narration
+  and all. In testing, recordings that were already fine exported exactly
+  as before, byte for byte.
+- **The Linux installer is executable again.** In 2.9.1, `install-linux.sh`
+  lost its executable permission, so running it directly gave "Permission
+  denied". Anyone following the documented `chmod +x` step was unaffected,
+  but the permission should never have been lost.
+
+### Changed
+
+- **Learning names the channel, not its service number.** A recording from a
+  recorder that keeps only the service number - Jellyfin, for one - made the
+  status bar and the log say, for example, "sid:17664" where they meant
+  Channel 4 HD. Once that number is paired with the channel's name in
+  Remembered logos, every learning message now uses the name.
+
 ## [2.9.1] - 2026-10-01
 
 ### Fixed

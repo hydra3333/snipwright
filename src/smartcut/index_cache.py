@@ -51,7 +51,17 @@ logger = logging.getLogger("snipwright")
 #    configurations its own kept ranges span.  The old attribute is no longer
 #    read, so a version 4 entry would restore nothing and look like a file
 #    with no LATM information at all.
-CACHE_VERSION = 5
+#
+# 6: sources are opened with a deep probe (open_options.py).  That can NUMBER
+#    the streams differently - a BBC Three HD recording's main audio is
+#    stream 1 by default and stream 2 when probed deep - and it changes what
+#    the walk learns about a receiver-mix audio-description track: opened
+#    shallow, that track has no sample rate, so the frames LATM leaves
+#    unstamped cannot be timed and were dropped.  An entry from the shallow
+#    open restores per-stream data under the old numbering and the old,
+#    incomplete packet list - measured: the second export of a file then kept
+#    only the AD track's stamped frames, 367 of 2197, whatever the code.
+CACHE_VERSION = 6
 
 CACHE_DIR = Path.home() / ".config" / "snipwright" / "smartcut-index"
 

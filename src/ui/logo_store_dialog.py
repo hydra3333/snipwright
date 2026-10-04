@@ -8,10 +8,17 @@ channel_key() in chalkline.py.  Nothing in Snipwright can resolve one to the
 other, which is why the pairing is typed in here by hand rather than worked
 out.  It is the only route there is.
 
-A row is one learned logo.  The Channel and Service ID columns are both
-lookup keys for that same logo, so filling in the empty half of a row makes
-the mask work for recordings from the other PVR too.  Typing a key that
-already has a row of its own merges the two.
+A row is one channel.  Most rows are a learned logo; a channel with no logo
+but a learned break ident (Film4, item 1y) gets a row from the card store
+instead, so it can be named and paired like any other.  The Channel and
+Service ID columns are both lookup keys for that same channel, so filling in
+the empty half of a row makes what was learned work for recordings from the
+other PVR too.  Typing a key that already has a row of its own merges the
+two.
+
+The Learn column switches learning off per channel (item 1x): what was
+learned is still used to detect breaks, but correcting a project on that
+channel no longer spends minutes decoding it to learn again.
 
 The mask itself is drawn rather than described.  A learned logo looks like a
 logo; a mask learned from a poor edit looks like scattered noise or a
@@ -41,14 +48,23 @@ from PySide6.QtWidgets import (
 )
 
 from repair.chalkline import (
+    CARD_H,
+    CARD_MATCH,
+    CARD_W,
     GH,
     GW,
     LOGO_STORE,
     MASK_HISTORY_MAX,
     active_index,
+    card_distances,
+    card_only_channels,
+    card_store_path,
+    channel_cards,
+    load_cards,
     load_store,
     mask_history,
     same_mask,
+    save_cards,
     save_store,
     store_display_name,
     store_service_id,
@@ -140,15 +156,80 @@ def _mask_thumbnail(entry):
     return pix
 
 
+def _card_thumbnail(entry):
+    """Draw a channel's most recent break ident, from its fingerprint.
+
+    The fingerprint is the ident shrunk to CARD_W x CARD_H greyscale, which
+    is what Chalkline matches against - so this is exactly what it looks
+    for, blocky as it is.  Shown in the column where a logo row shows its
+    mask, so a card-only row is recognisable at a glance too.
+    """
+    cards = entry.get("cards") or []
+    if not cards:
+        return None
+    try:
+        fp = [int(v) for v in _flatten(cards[-1].get("fingerprint") or [])]
+    except (TypeError, ValueError):
+        return None
+    if len(fp) != CARD_W * CARD_H:
+        return None
+    cell = max(1, min((_THUMB_W - _PAD) // CARD_W, (_THUMB_H - _PAD) // CARD_H))
+    pix = QPixmap(_THUMB_W, _THUMB_H)
+    pix.fill(QColor(27, 27, 31))
+    painter = QPainter(pix)
+    painter.setPen(Qt.NoPen)
+    origin_x = (_THUMB_W - CARD_W * cell) // 2
+    origin_y = (_THUMB_H - CARD_H * cell) // 2
+    for i, v in enumerate(fp):
+        v = max(0, min(255, v))
+        painter.setBrush(QColor(v, v, v))
+        painter.drawRect(origin_x + (i % CARD_W) * cell,
+                         origin_y + (i // CARD_W) * cell, cell, cell)
+    painter.end()
+    return pix
+
+
+def _flatten(values):
+    """A fingerprint stored as rows or as one flat list, as one flat list."""
+    out = []
+    for v in values:
+        if isinstance(v, (list, tuple)):
+            out.extend(_flatten(v))
+        else:
+            out.append(v)
+    return out
+
+
+def _union_cards(*lists):
+    """Cards from several lists, oldest first, without repeating one.
+
+    Two cards are the same ident when their fingerprints match as closely as
+    Chalkline needs them to - the test add_card() uses to avoid filing an
+    ident twice.
+    """
+    out = []
+    for cards in lists:
+        for card in cards or []:
+            fp = card.get("fingerprint")
+            if fp is None:
+                continue
+            if any(card_distances([_flatten(fp)], _flatten(c["fingerprint"]))[0]
+                   < CARD_MATCH for c in out):
+                continue
+            out.append(card)
+    return out
+
+
 class LogoStoreDialog(QDialog):
     """Show and edit the logos Chalkline has learned."""
 
-    COL_MASK, COL_NAME, COL_SID, COL_LOGO, COL_CONTRAST = range(5)
+    COL_MASK, COL_NAME, COL_SID, COL_LOGO, COL_CONTRAST, COL_IDENTS, \
+        COL_LEARN = range(7)
 
     def __init__(self, parent=None, store_path=LOGO_STORE):
         super().__init__(parent)
         self.setWindowTitle(self.tr("Remembered logos"))
-        self.setMinimumSize(660, 420)
+        self.setMinimumSize(780, 420)
         self._store_path = store_path
         self._filling = False
         # An edit in flight, and the edit waiting for the event loop to
@@ -159,27 +240,41 @@ class LogoStoreDialog(QDialog):
         # additive reload would fetch a forgotten channel straight back off
         # the disk it has not yet been removed from.
         self._removed_keys = set()
+        self._removed_card_keys = set()
         self._store = load_store(store_path)
+        # Break idents (item 1u) live in their own file beside the logos.
+        # Every card entry is held here, not just the card-only ones, so Save
+        # can write the file back whole - see _save_cards().
+        self._card_path = card_store_path(store_path)
+        self._cards = load_cards(self._card_path)
+        # What each table row shows: ("logo", entry) for the logo store's
+        # entries, in their order and first, then ("card", entry) for
+        # channels known only by a break ident.  Rebuilt by _fill_table().
+        self._rows = []
 
         layout = QVBoxLayout(self)
 
         intro = QLabel(self.tr(
-            "Chalkline learns each channel's logo when you correct a "
-            "detection and save the project. A recorder that keeps the "
-            "channel name gives a name here; one that keeps the service "
-            "number gives a number. They are the same channel, but Snipwright "
-            "cannot tell - fill in the missing half of a row and the logo "
-            "will be used for recordings from both."
+            "Chalkline learns each channel's logo, and any ident it shows at "
+            "the edges of its breaks, when you correct a detection and save "
+            "the project. A recorder that keeps the channel name gives a name "
+            "here; one that keeps the service number gives a number. They are "
+            "the same channel, but Snipwright cannot tell - fill in the "
+            "missing half of a row and what was learned will be used for "
+            "recordings from both. Untick Learn for a channel that already "
+            "detects well: what it has learned is still used, but correcting "
+            "it no longer spends minutes learning again."
         ))
         intro.setWordWrap(True)
         intro.setStyleSheet("color: gray;")
         layout.addWidget(intro)
 
         body = QHBoxLayout()
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
             self.tr("Logo"), self.tr("Channel"), self.tr("Service ID"),
-            self.tr("Mask"), self.tr("Contrast"),
+            self.tr("Mask"), self.tr("Contrast"), self.tr("Idents"),
+            self.tr("Learn"),
         ])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -187,7 +282,7 @@ class LogoStoreDialog(QDialog):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.COL_NAME, QHeaderView.Stretch)
         for c in (self.COL_MASK, self.COL_SID, self.COL_LOGO,
-                  self.COL_CONTRAST):
+                  self.COL_CONTRAST, self.COL_IDENTS, self.COL_LEARN):
             header.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.itemChanged.connect(self._on_item_changed)
         body.addWidget(self.table, 1)
@@ -260,6 +355,20 @@ class LogoStoreDialog(QDialog):
             dict(e) for e in on_disk.get("channels", [])
             if e.get("keys") and not (set(e["keys"]) & known)
         ]
+        try:
+            cards_on_disk = load_cards(self._card_path)
+        except Exception:
+            cards_on_disk = {"channels": []}
+        card_known = {k for e in self._cards.get("channels", [])
+                      for k in e.get("keys", [])} | self._removed_card_keys
+        card_added = [
+            dict(e) for e in cards_on_disk.get("channels", [])
+            if e.get("keys") and not (set(e["keys"]) & card_known)
+        ]
+        if card_added:
+            self._cards.setdefault("channels", []).extend(card_added)
+            if not added:
+                self._fill_table()
         if not added:
             return
 
@@ -278,12 +387,17 @@ class LogoStoreDialog(QDialog):
     def _channels(self):
         return self._store.setdefault("channels", [])
 
+    def _card_rows(self):
+        """Card-store entries with no logo row to belong to."""
+        return card_only_channels(self._cards, self._store)
+
     def _fill_table(self):
         self._filling = True
         channels = self._channels()
-        self.table.setRowCount(len(channels))
+        self._rows = ([("logo", e) for e in channels]
+                      + [("card", e) for e in self._card_rows()])
+        self.table.setRowCount(len(self._rows))
         self.table.verticalHeader().setDefaultSectionSize(_THUMB_H + 6)
-
         for i, entry in enumerate(channels):
             thumb = QTableWidgetItem()
             thumb.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -339,12 +453,71 @@ class LogoStoreDialog(QDialog):
                 if cell is not None:
                     cell.setToolTip("\n".join(lines))
 
+            first = (entry.get("keys") or [""])[0]
+            self._set_idents(i, len(channel_cards(self._cards, self._store,
+                                                  first)), lines)
+            self._set_learn(i, entry, lines)
+        for i, (_kind, entry) in enumerate(self._rows[len(channels):],
+                                           start=len(channels)):
+            self._fill_card_row(i, entry)
         self._filling = False
-        if not channels:
+        if not self._rows:
             self._status.setText(self.tr(
                 "Nothing learned yet. Correct a detection and save the "
                 "project, and the channel's logo will appear here."
             ))
+
+    def _set_idents(self, row, count, tip_lines):
+        """How many break idents the row's channel has learned."""
+        item = QTableWidgetItem(str(count) if count else "")
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        item.setTextAlignment(Qt.AlignCenter)
+        if tip_lines:
+            item.setToolTip("\n".join(tip_lines))
+        self.table.setItem(row, self.COL_IDENTS, item)
+
+    def _set_learn(self, row, entry, tip_lines=None):
+        """The per-channel learning switch, as a tick box."""
+        item = QTableWidgetItem()
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                      | Qt.ItemIsUserCheckable)
+        on = entry.get("learn", True) is not False
+        item.setCheckState(Qt.Checked if on else Qt.Unchecked)
+        item.setToolTip(self.tr(
+            "Learn from the projects you correct on this channel. Untick it "
+            "once the channel detects well: what it has learned is still "
+            "used, and saving a correction no longer starts a learning pass."
+        ))
+        self.table.setItem(row, self.COL_LEARN, item)
+
+    def _fill_card_row(self, row, entry):
+        """A channel known only by a break ident - Film4 is the reason."""
+        thumb = QTableWidgetItem()
+        thumb.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        pix = _card_thumbnail(entry)
+        if pix is not None:
+            thumb.setData(Qt.DecorationRole, pix)
+        self.table.setItem(row, self.COL_MASK, thumb)
+        self.table.setItem(row, self.COL_NAME,
+                           QTableWidgetItem(store_display_name(entry)))
+        self.table.setItem(row, self.COL_SID,
+                           QTableWidgetItem(store_service_id(entry)))
+        tip = [self.tr(
+            "No logo - this channel is recognised by the ident at the edges "
+            "of its breaks. The picture is the most recent one learned."
+        )]
+        for col, text in ((self.COL_LOGO, self.tr("No logo")),
+                          (self.COL_CONTRAST, "")):
+            item = QTableWidgetItem(text)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, col, item)
+        self._set_idents(row, len(entry.get("cards") or []), tip)
+        self._set_learn(row, entry)
+        for col in (self.COL_MASK, self.COL_NAME, self.COL_SID,
+                    self.COL_LOGO, self.COL_CONTRAST):
+            cell = self.table.item(row, col)
+            if cell is not None:
+                cell.setToolTip("\n".join(tip))
 
     def _on_item_changed(self, item):
         """Note the edit and handle it once the cell editor has closed.
@@ -364,6 +537,9 @@ class LogoStoreDialog(QDialog):
         if self._filling:
             return
         col = item.column()
+        if col == self.COL_LEARN:
+            self._toggle_learn(item)
+            return
         if col not in (self.COL_NAME, self.COL_SID):
             return
         self._pending_edit = (item.row(), col, item.text().strip())
@@ -390,8 +566,39 @@ class LogoStoreDialog(QDialog):
         finally:
             self._editing = False
 
+    def _toggle_learn(self, item):
+        """Switch learning on or off for one channel (item 1x).
+
+        Stored on the row's own entry - the logo entry, or the card entry for
+        a card-only channel - as `learn: false`; on is stored as nothing at
+        all, so the file stays exactly as it was for every channel left on.
+        """
+        row = item.row()
+        if not (0 <= row < len(self._rows)):
+            return
+        _kind, entry = self._rows[row]
+        on = item.checkState() == Qt.Checked
+        if on:
+            entry.pop("learn", None)
+        else:
+            entry["learn"] = False
+        label = (store_display_name(entry) or store_service_id(entry)
+                 or self.tr("this channel"))
+        if on:
+            self._status.setText(self.tr(
+                "%s will learn from the projects you correct again."
+            ) % label)
+        else:
+            self._status.setText(self.tr(
+                "%s will no longer learn from your corrections. What it has "
+                "learned is still used to find its breaks."
+            ) % label)
+
     def _apply_edit(self, row, col, typed):
         channels = self._channels()
+        if len(channels) <= row < len(self._rows):
+            self._apply_card_edit(self._rows[row][1], col, typed)
+            return
         if not (0 <= row < len(channels)):
             return
 
@@ -516,6 +723,10 @@ class LogoStoreDialog(QDialog):
         history = history[:MASK_HISTORY_MAX]
         merged = write_history(dict(clash), history, incumbent)
         merged["keys"] = keys
+        # Learning stays off if it was off for either: the user stopped it
+        # for a reason, and joining two names does not change the channel.
+        if entry.get("learn", True) is False:
+            merged["learn"] = False
         # The merged entry takes the EDITED row's place and the clash row is
         # the one removed, whichever mask ends up in use.  An earlier version
         # removed whichever entry lost the contrast comparison, which did
@@ -537,12 +748,102 @@ class LogoStoreDialog(QDialog):
 
     # -- actions ------------------------------------------------------------
 
+    def _apply_card_edit(self, entry, col, typed):
+        """Rename, pair or join a channel known only by its break ident.
+
+        The same three outcomes as a logo row: a new name is added, a name
+        another card-only row already has joins the two, and a name that
+        belongs to a logo row pairs this channel with that logo - after which
+        the logo's row shows these idents too, because channel_cards() finds
+        cards under any name the logo entry lists.
+        """
+        old = (store_display_name(entry) if col == self.COL_NAME
+               else store_service_id(entry))
+        if col == self.COL_SID and typed and not typed.startswith(_SID_PREFIX):
+            typed = _SID_PREFIX + typed
+        if typed == old:
+            return
+        if not typed:
+            keys = [k for k in entry.get("keys", []) if k != old]
+            if not keys:
+                self._warn(self.tr(
+                    "A channel needs at least one of Channel or Service ID. "
+                    "Use Forget to remove it entirely."
+                ))
+                self._fill_table()
+                return
+            entry["keys"] = keys
+            self._fill_table()
+            return
+
+        keys = [k for k in entry.get("keys", []) if k != old] + [typed]
+        logo = next((e for e in self._channels()
+                     if typed in e.get("keys", [])), None)
+        if logo is not None:
+            if QMessageBox.question(
+                self,
+                self.tr("Remembered logos"),
+                self.tr(
+                    "\u201c%s\u201d has a remembered logo. Joining them makes "
+                    "this channel's idents part of that channel, so both are "
+                    "used together.\n\nJoin them?"
+                ) % typed,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            ) != QMessageBox.Yes:
+                self._fill_table()
+                return
+            entry["keys"] = list(dict.fromkeys(keys))
+            logo["keys"] = list(dict.fromkeys(
+                list(logo.get("keys", [])) + entry["keys"]))
+            if entry.get("learn", True) is False:
+                logo["learn"] = False
+            self._fill_table()
+            self._status.setText(self.tr(
+                "Joined: %s now uses this channel's idents with its logo."
+            ) % (store_display_name(logo) or store_service_id(logo)))
+            return
+
+        other = next((e for e in self._cards.get("channels", [])
+                      if e is not entry and typed in e.get("keys", [])), None)
+        if other is not None:
+            if QMessageBox.question(
+                self,
+                self.tr("Remembered logos"),
+                self.tr(
+                    "\u201c%s\u201d already has idents of its own. Joining "
+                    "them keeps all of them under the one channel."
+                    "\n\nJoin them?"
+                ) % typed,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            ) != QMessageBox.Yes:
+                self._fill_table()
+                return
+            entry["keys"] = list(dict.fromkeys(keys + list(other.get("keys", []))))
+            entry["cards"] = _union_cards(other.get("cards"), entry.get("cards"))
+            if other.get("learn", True) is False:
+                entry["learn"] = False
+            self._cards["channels"] = [e for e in self._cards["channels"]
+                                       if e is not other]
+            self._fill_table()
+            self._status.setText(self.tr(
+                "Joined into one channel holding %d ident(s)."
+            ) % len(entry["cards"]))
+            return
+
+        entry["keys"] = list(dict.fromkeys(keys))
+        self._fill_table()
+
     def _warn(self, text):
         QMessageBox.information(self, self.tr("Remembered logos"), text)
 
     def _forget(self):
         row = self.table.currentRow()
         channels = self._channels()
+        if len(channels) <= row < len(self._rows):
+            self._forget_card(self._rows[row][1])
+            return
         if not (0 <= row < len(channels)):
             return
         entry = channels[row]
@@ -564,6 +865,58 @@ class LogoStoreDialog(QDialog):
         self._removed_keys |= set(entry.get("keys", []))
         self._fill_table()
         self._status.setText(self.tr("Forgotten: %s") % label)
+
+    def _forget_card(self, entry):
+        """Forget a card-only channel's idents."""
+        label = (store_display_name(entry) or store_service_id(entry)
+                 or self.tr("this channel"))
+        if QMessageBox.question(
+            self,
+            self.tr("Forget idents"),
+            self.tr(
+                "Forget the idents remembered for \u201c%s\u201d?\n\n"
+                "Chalkline will learn them again the next time you correct a "
+                "detection for that channel and save the project."
+            ) % label,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self._cards["channels"] = [e for e in self._cards.get("channels", [])
+                                   if e is not entry]
+        self._removed_card_keys |= set(entry.get("keys", []))
+        self._fill_table()
+        self._status.setText(self.tr("Forgotten: %s") % label)
+
+    def _save_cards(self):
+        """Write the card store back, merged against what is on disk now.
+
+        The same reasoning as the logo store in _save(), one step further:
+        an ident learned while this window was open is kept even for a
+        channel shown here, because the names and the Learn switch come from
+        this window but the idents themselves come from disk.
+        """
+        try:
+            on_disk = load_cards(self._card_path)
+        except Exception:
+            on_disk = {"channels": []}
+        mine = self._cards.get("channels", [])
+        my_keys = {k for e in mine for k in e.get("keys", [])}
+        my_keys |= self._removed_card_keys
+        kept = [e for e in on_disk.get("channels", [])
+                if not (set(e.get("keys", [])) & my_keys)]
+        written = []
+        for entry in mine:
+            keys = set(entry.get("keys", []))
+            fresh = [e.get("cards") for e in on_disk.get("channels", [])
+                     if set(e.get("keys", [])) & keys]
+            out = dict(entry)
+            out["cards"] = _union_cards(entry.get("cards"), *fresh)
+            written.append(out)
+        if not (kept or written) and not os.path.exists(self._card_path):
+            return      # nothing learned and nothing to write
+        save_cards({"version": on_disk.get("version", 1),
+                    "channels": kept + written}, self._card_path)
 
     def _save(self):
         """Write the table back, merged against whatever is on disk now.
@@ -594,6 +947,7 @@ class LogoStoreDialog(QDialog):
 
         try:
             save_store(merged, self._store_path)
+            self._save_cards()
         except OSError as exc:
             QMessageBox.warning(
                 self,

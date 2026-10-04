@@ -24,6 +24,7 @@ that cannot be satisfied at all falls back to reading the track from the start
 """
 
 import av
+from smartcut.open_options import SOURCE_OPEN_OPTIONS
 
 
 class LazyAudioPackets:
@@ -56,7 +57,9 @@ class LazyAudioPackets:
 
     def _open(self):
         if self._container is None:
-            self._container = av.open(self._path)
+            # The same options as the container whose stream indices these
+            # packets are matched against - see open_options.py.
+            self._container = av.open(self._path, options=SOURCE_OPEN_OPTIONS)
             # Match on the stream's own index rather than its position in the
             # list: an MPEG-TS file's stream indices are not contiguous, so
             # streams[1] is not necessarily the stream whose index is 1.

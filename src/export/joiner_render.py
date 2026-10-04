@@ -41,6 +41,13 @@ from export.exporter import (
     _Cancelled as _ExporterCancelled,
     probe_subtitle_tracks,
 )
+from export.dvb_subtitles import (
+    CARRIED_CODECS,
+    DVB_CODECS,
+    PGS_CODECS,
+    carry_dvb_subtitles,
+    subtitle_kinds,
+)
 
 
 def _joiner_pix_fmt(segments):
@@ -700,27 +707,46 @@ class JoinerRenderWorker(QThread):
                 % (", ".join(str(c) for c in counts), tracks),
             ))
 
-        # Subtitles do not survive a re-encoded join.  The picture and sound
-        # go through the concat filter below, and broadcast subtitles are
-        # images on their own timeline that cannot pass through it, so the
-        # joined file is built without them.  That was SILENT: a join of an
-        # SD and an HD recording, both with subtitles (2026-09-25), came out
-        # with none and said nothing.  Say so, in the log and the
-        # completion summary.  A join of scenes that share one format is not
-        # re-encoded and keeps them (see the lossless path's -map 0).
-        with_subs = sum(1 for seg in segments if _subtitle_stream_count(seg))
-        if with_subs:
+        # Subtitles cannot go through the concat filter below - broadcast
+        # subtitles are pictures on their own timeline - so DVB subtitles are
+        # carried round it instead and added once the picture and sound are
+        # joined (item 1w; see export/dvb_subtitles.py, which also explains
+        # why some scenes' subtitles are redrawn).  Anything else - a disc's
+        # PGS subtitles, which a transport stream cannot hold - still cannot
+        # be carried, and says so: that used to be SILENT for every kind.
+        #
+        # What is CARRIED is read from the rendered scenes; what is LOST must
+        # be read from the SOURCE recordings.  A scene is rendered to a
+        # transport stream, and a Blu-ray's PGS subtitles are already dropped
+        # at that step - so judging by the rendered scenes, as this check
+        # first did, found nothing to report and said nothing (the user's join of
+        # an HD, an SD and a Blu-ray recording, 2026-10-03).  Every entry,
+        # title cards included, renders exactly one segment, in order.
+        # A disc's PGS is converted to DVB from the source (2.10.0), so it
+        # counts as carried; teletext and anything else is still lost.
+        kinds = [subtitle_kinds(seg) for seg in segments]
+        lost, sources = [], []
+        for entry in self._entries[:len(segments)]:
+            source = [] if entry.is_title else subtitle_kinds(entry.source)
+            lost.append([x for x in source if x not in CARRIED_CODECS])
+            sources.append((entry.source, entry.start)
+                           if any(x in PGS_CODECS for x in source) else None)
+        dvb_scenes = sum(1 for k, src in zip(kinds, sources)
+                         if src or any(x in DVB_CODECS for x in k))
+        other_scenes = sum(1 for k in lost if k)
+        if other_scenes:
             logger.warning(
-                "Joiner: %d of %d scene(s) carry subtitles, but a join that "
-                "has to be re-encoded cannot carry them; the joined video "
-                "has none.", with_subs, len(segments))
+                "Joiner: %d of %d scene(s) have subtitles of a kind a "
+                "re-encoded join cannot carry (%s); the joined video does "
+                "not have them.", other_scenes, len(segments),
+                ", ".join(sorted({x for k in lost for x in k})))
             self._notes.append((
-                "subtitles could not be carried through",
-                "%d of the %d scenes had subtitles, but a join that has to "
-                "be re-encoded passes the picture and sound through a filter "
-                "that subtitles cannot go through, so the joined video has "
-                "none. A join of scenes that all share one format is not "
-                "re-encoded, and keeps them." % (with_subs, len(segments)),
+                "some subtitles could not be carried through",
+                "%d of the %d scenes had subtitles of a kind that cannot be "
+                "carried through a join that has to be re-encoded (such as "
+                "teletext), so the joined video does not have them. A join "
+                "of scenes that all share one format is not re-encoded, and "
+                "keeps them." % (other_scenes, len(segments)),
             ))
         if tracks == 0:
             logger.warning("Joiner: no audio track common to every scene.")
@@ -826,7 +852,56 @@ class JoinerRenderWorker(QThread):
         self._run_with_progress(cmd, total, "Re-encoding and joining scenes…")
         if not os.path.exists(joined):
             raise RuntimeError("Re-encoding the joined video failed.")
+        if dvb_scenes:
+            self._carry_subtitles(joined, segments, durations, tmpdir, sources)
         return joined
+
+    def _carry_subtitles(self, joined, segments, durations, tmpdir,
+                         sources=None):
+        """Add the scenes' DVB subtitles to the re-encoded join, in place.
+
+        A failure here must never cost the join itself: the picture and sound
+        are done and good, so it is logged, reported, and the join goes on
+        without subtitles - exactly what every re-encoded join did before.
+        """
+        self._check_cancel()
+        self._report(self._last_percent, "Adding subtitles…")
+        with_subs = os.path.join(tmpdir, "joined-subtitles.ts")
+        try:
+            summary = carry_dvb_subtitles(joined, with_subs, segments,
+                                          durations, sources)
+        except Exception:
+            logger.exception("Joiner: carrying the subtitles through failed; "
+                             "the joined video is written without them.")
+            self._notes.append((
+                "subtitles could not be carried through",
+                "The scenes had subtitles, but adding them to the re-encoded "
+                "join failed, so the joined video was written without them. "
+                "The log has the details.",
+            ))
+            return
+        if not summary:
+            return
+        os.replace(with_subs, joined)
+        if summary.get("converted"):
+            self._notes.append((
+                "disc subtitles were converted",
+                "%d scene(s) came from a disc, whose subtitles cannot be "
+                "carried into a joined broadcast video as they are, so they "
+                "were converted to broadcast (DVB) subtitles - the words, "
+                "colours and positions are unchanged."
+                % summary["converted"],
+            ))
+        if summary["redrawn"]:
+            self._notes.append((
+                "subtitles were redrawn to fit",
+                "%d scene(s) had subtitles drawn for a different picture "
+                "size from the joined video, so they were redrawn to match "
+                "it - the words and colours are unchanged. That keeps them "
+                "showing in every player, including ones that cannot cope "
+                "with subtitles changing size part-way through."
+                % summary["redrawn"],
+            ))
 
     def _run_with_progress(self, cmd, total_seconds, label):
         """Run an ffmpeg command that emits -progress, moving the bar via the
@@ -1090,19 +1165,6 @@ class JoinerRenderWorker(QThread):
         else:
             # Match source (.ts) - the joined file is the output.
             shutil.move(joined_ts, self._out)
-
-
-def _subtitle_stream_count(path):
-    """How many subtitle streams a file has, or 0 if it cannot be read."""
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "s",
-             "-show_entries", "stream=index", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=60,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return 0
-    return sum(1 for line in out.splitlines() if line.strip())
 
 
 class JoinExportAdapter(QObject):

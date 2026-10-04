@@ -19,6 +19,7 @@ from smartcut.media_utils import VideoExportMode, VideoExportQuality, get_crf_fo
 from smartcut.misc_data import CutSegment
 from smartcut.nal_tools import get_h265_nal_unit_type, is_leading_picture_nal_type
 from smartcut.poc_rewrite import HevcPocRewriter
+from smartcut.open_options import SOURCE_OPEN_OPTIONS
 
 
 @dataclass
@@ -248,7 +249,9 @@ class VideoCutter:
         self.in_time_base: Fraction = self.in_stream.time_base
 
         # Open another container because seeking to beginning of the file is unreliable...
-        self.input_av_container: InputContainer = av.open(media_container.path, 'r', metadata_errors='ignore')
+        self.input_av_container: InputContainer = av.open(
+            media_container.path, 'r', metadata_errors='ignore',
+            options=SOURCE_OPEN_OPTIONS)
 
         self.demux_iter = self.input_av_container.demux(self.in_stream)
         self.demux_saved_packet = None

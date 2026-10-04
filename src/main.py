@@ -1352,14 +1352,27 @@ class MainWindow(QMainWindow):
         UserGuideDialog(self).exec()
 
     def show_about(self):
-        """Modal About dialog: app icon, version, GitHub link and developer."""
+        """Modal About dialog: app icon, version, GitHub link, and the
+        versions of everything Snipwright is running on.
+
+        The versions are there because the Python libraries are pinned but
+        other software can still change them - a user's auto-updater, for
+        one.  Listing them lets anyone check without Snipwright nagging at
+        every start, and a library that differs from the version Snipwright
+        was tested with is marked.  "Copy details" puts the list on the
+        clipboard for a bug report - always in English, because that is who
+        reads the reports.
+        """
+        import html
         from PySide6.QtWidgets import (
+            QApplication,
             QDialog,
             QVBoxLayout,
             QHBoxLayout,
             QLabel,
             QPushButton,
         )
+        from utils.components import components, differs
         from utils.icons import app_icon
 
         url = "https://github.com/infidelus/snipwright"
@@ -1394,9 +1407,62 @@ class MainWindow(QMainWindow):
         body.setAlignment(Qt.AlignCenter)
         layout.addWidget(body)
 
+        # What Snipwright is running on.  English names for the copied
+        # report, translated ones for the screen.
+        english = {
+            "system": "System", "python": "Python", "pyside6": "PySide6",
+            "qt": "Qt", "pyav": "PyAV", "pyav_ffmpeg": "FFmpeg inside PyAV",
+            "numpy": "numpy", "bitstring": "bitstring", "tqdm": "tqdm",
+            "ffmpeg": "FFmpeg program", "mkvmerge": "MKVToolNix",
+        }
+        shown = dict(english)
+        shown.update({
+            "system": self.tr("System"),
+            "pyav_ffmpeg": self.tr("FFmpeg inside PyAV"),
+            "ffmpeg": self.tr("FFmpeg program"),
+        })
+        rows = components(self.config)
+        cells = []
+        report = [f"{APP_NAME} {VERSION}"]
+        for ident, version, tested in rows:
+            if version is None:
+                text = self.tr("not found")
+                report.append(f"{english[ident]}: not found")
+            elif differs(version, tested):
+                text = ("<span style='color:#e0a030'>%s</span>" % html.escape(
+                    self.tr("%(version)s - tested with %(tested)s")
+                    % {"version": version, "tested": tested}))
+                report.append(f"{english[ident]}: {version} "
+                              f"(tested with {tested})")
+            else:
+                text = html.escape(version)
+                report.append(f"{english[ident]}: {version}")
+            cells.append(
+                f"<tr><td style='color:#9aa0a6;padding-right:14px'>"
+                f"{html.escape(shown[ident])}</td><td>{text}</td></tr>")
+        # Outside the f-string: pyside6-lupdate cannot see a tr() call
+        # inside one, and the heading would never reach the translators.
+        heading = self.tr("Running on")
+        details = QLabel(
+            f"<p style='margin:10px 0 4px 0;color:#9aa0a6;text-align:center'>"
+            f"{html.escape(heading)}</p>"
+            f"<table align='center' cellspacing='0' cellpadding='1'>"
+            + "".join(cells) + "</table>"
+        )
+        details.setTextFormat(Qt.RichText)
+        details.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(details)
+
         # A little breathing room so OK isn't pressed against the link, and
         # centre it rather than tucking it into the corner.
         layout.addSpacing(12)
+
+        copy_button = QPushButton(self.tr("Copy details"))
+
+        def copy_details():
+            QApplication.clipboard().setText("\n".join(report))
+            copy_button.setText(self.tr("Copied"))
+        copy_button.clicked.connect(copy_details)
 
         ok_button = QPushButton(self.tr("OK"))
         ok_button.setDefault(True)
@@ -1404,6 +1470,7 @@ class MainWindow(QMainWindow):
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
+        button_row.addWidget(copy_button)
         button_row.addWidget(ok_button)
         button_row.addStretch(1)
         layout.addLayout(button_row)
@@ -2841,7 +2908,7 @@ class MainWindow(QMainWindow):
             )
         if info.get("trials"):
             log.info("  %s is now using the %dpx logo of the %d it holds",
-                     info.get("channel", "this channel"),
+                     info.get("label") or info.get("channel", "this channel"),
                      info.get("active_count", 0), info.get("masks_held", 0))
 
         secs = info.get("elapsed")
@@ -2874,8 +2941,13 @@ class MainWindow(QMainWindow):
             log.info("Chalkline %s", line)
         if info.get("card") is not None:
             log.info("Chalkline remembered an edge card for %s (%d held)",
-                     info.get("channel", "this channel"),
+                     info.get("label") or info.get("channel", "this channel"),
                      info.get("cards_held", 1))
+        if info.get("markers_learned"):
+            log.info("Chalkline remembered where %s's programmes start and "
+                     "end (%d frame(s); %d project(s) held)",
+                     info.get("label") or info.get("channel", "this channel"),
+                     info["markers_learned"], info.get("marker_projects", 1))
 
     def _on_learn_started(self, channel):
         """Show that learning has begun, and keep showing it.
@@ -2905,7 +2977,7 @@ class MainWindow(QMainWindow):
             self._learn_channel = None
             return
         if info.get("active_changed"):
-            channel = info.get("channel", "this channel")
+            channel = info.get("label") or info.get("channel", "this channel")
             log.info("Chalkline changed which logo it uses for %s", channel)
             self.statusBar().showMessage(
                 self.tr("Chalkline found a better logo for %s from your "
@@ -2916,7 +2988,7 @@ class MainWindow(QMainWindow):
             self._learn_channel = None
             return
         if info.get("learned") and info.get("learned_active", True):
-            channel = info.get("channel", "this channel")
+            channel = info.get("label") or info.get("channel", "this channel")
             kind = info.get("kind") or ""
             log.info(
                 "Chalkline learned %s %s logo for %s: %d pixels, contrast %s",
@@ -2941,7 +3013,8 @@ class MainWindow(QMainWindow):
             log.info(
                 "Chalkline learned another %s logo for %s (%d pixels): it "
                 "will be used if it does better than the one in use",
-                info.get("kind") or "", info.get("channel", "this channel"),
+                info.get("kind") or "",
+                info.get("label") or info.get("channel", "this channel"),
                 info["learned"],
             )
             for line in info.get("report", []):

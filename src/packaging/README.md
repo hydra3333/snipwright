@@ -69,13 +69,47 @@ you with the venv's interpreter.
 It writes two `.desktop` files into `~/.local/share/applications/` with
 absolute paths resolved from this checkout, so re-run it if you move the
 project.  It also registers the editor as a handler for `.ts` and `.mkv`.
+To remove them again, use the uninstaller below.
 
-To remove the menu entries:
+## Uninstalling
+
+Each platform has an uninstaller beside its installer, which removes what the
+installer set up and what Snipwright creates while it runs.
 
 ```sh
-rm ~/.local/share/applications/snipwright.desktop \
-   ~/.local/share/applications/snipwright-watcher.desktop
+bash src/packaging/uninstall-linux.sh
 ```
+
+On Windows, double-click `src\packaging\uninstall-windows.bat`.
+
+It removes the menu entries or shortcuts, Snipwright's `.vprj` and `.swproj`
+file types (on Windows only Snipwright's own entries - VideoReDo's are left
+alone), the Watcher's start-on-login entry, Snipwright's cache and temporary
+scratch files, and the project's `.venv`. On Windows it also offers to remove
+the Defender exclusion, if one was added, and Windows asks for permission.
+
+It **asks** before deleting two things:
+
+- **Quick Stream Fix working copies** - temporary repaired copies of
+  recordings, often several gigabytes each, which it lists first.
+- **Your settings** - settings, output profiles, learned channel logos and
+  break idents, the batch queue and the Watcher's settings, in
+  `~/.config/snipwright`. Keep them if you might reinstall: Snipwright picks
+  them up again, so it doesn't have to relearn your channels.
+
+Every question comes before anything is removed, and it refuses to start while
+Snipwright or its Watcher is running. It never touches recordings, exported
+videos, project files or logs - log files kept in the settings folder stay even
+if you delete your settings - and it leaves FFmpeg, MKVToolNix and Python
+installed, since other software may use them.
+
+If you have more than one copy of Snipwright, the menu entries, file types and
+start-on-login entry belong to whichever copy installed them last. The
+uninstaller leaves them alone if they point at a different copy, so removing an
+old copy can't break the one you use.
+
+It can't delete the folder it runs from, so the last step is yours: delete the
+Snipwright folder once it has finished. It tells you which.
 
 ## Icons
 

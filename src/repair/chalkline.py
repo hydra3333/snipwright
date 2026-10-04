@@ -93,6 +93,7 @@ float at a time.
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -2232,6 +2233,19 @@ def detect(video, verbose=False, keep=None, learn=None,
                 if verbose:
                     for line in card_report:
                         print(f"  {line}", file=sys.stderr)
+                # Programme markers (item 1z), from the same frames and cuts.
+                learned = learn_programme_markers(cards, times, learn["cuts"])
+                if learned is not None and channel:
+                    mpath = marker_store_path(store_path)
+                    mstore = load_markers(mpath)
+                    held = add_marker_project(markers_get(mstore, channel),
+                                              learned,
+                                              os.path.basename(video))
+                    markers_set(mstore, channel, held)
+                    save_markers(mstore, mpath)
+                    info["markers_learned"] = sum(
+                        len(v) for v in learned["places"].values())
+                    info["marker_projects"] = len(held)
             # Built here rather than by the caller: only now is the real
             # frame count known, and deriving it from duration x FPS is off
             # by one often enough to matter.
@@ -2779,6 +2793,27 @@ def detect(video, verbose=False, keep=None, learn=None,
                       f"found by the card alone, {moved} edge(s) moved",
                       file=sys.stderr)
                 for line in card_report:
+                    print(f"    {line}", file=sys.stderr)
+
+    # Programme markers (item 1z): refine the lead-in's and tail's inner
+    # edges.  After the edge cards, so it refines the final placement; not
+    # while learning, for the same reason they are not.
+    if learn is None and channel and cards is not None:
+        # Never the recording's own markers - see place_programme_markers().
+        own = os.path.basename(video)
+        mprojects = [p for p in channel_markers(
+            load_markers(marker_store_path(store_path)),
+            load_store(store_path), channel) if p.get("project") != own]
+        if mprojects:
+            marker_report = []
+            breaks, mmoved = place_programme_markers(
+                breaks, cards, times, mprojects, events, duration,
+                marker_report, exclude=own)
+            info["marker_edges_moved"] = mmoved
+            if verbose:
+                print(f"  programme markers: {len(mprojects)} project(s), "
+                      f"{mmoved} edge(s) moved", file=sys.stderr)
+                for line in marker_report:
                     print(f"    {line}", file=sys.stderr)
 
     info.update({
@@ -3702,6 +3737,398 @@ def channel_cards(card_store, logo_store, key):
     return held
 
 
+def card_only_channels(card_store, logo_store):
+    """Card-store entries for channels with no logo under any of their names.
+
+    These are the channels the Remembered Logos window has to list from the
+    card store, because the logo store has no row for them - Film4 is the
+    case that forced it (item 1y).  A card entry sharing any key with a logo
+    entry belongs to that logo's row instead, which is exactly how
+    channel_cards() finds it.
+    """
+    logo_keys = {k for e in logo_store.get("channels", [])
+                 for k in e.get("keys", [])}
+    return [e for e in card_store.get("channels", [])
+            if e.get("keys") and not (set(e["keys"]) & logo_keys)]
+
+
+def learning_enabled(key, store_path=LOGO_STORE):
+    """Whether Chalkline may learn from a corrected project on this channel.
+
+    Item 1x.  A channel that already detects well gains nothing from being
+    taught again, and each lesson is a decode minutes long - so the user can
+    switch learning off per channel in the Remembered Logos window.  What is
+    already learned is still USED; only the learning stops.
+
+    The switch lives on the channel's row: the logo entry for a channel with
+    a logo, the card entry for a card-only one.  Absent means on, so every
+    store written before this existed keeps learning exactly as it did.
+    """
+    if not key:
+        return True
+    entry = store_get(load_store(store_path), key)
+    if entry is None:
+        cstore = load_cards(card_store_path(store_path))
+        entry = next((e for e in cstore.get("channels", [])
+                      if key in e.get("keys", [])), None)
+    return entry is None or entry.get("learn", True) is not False
+
+
+def channel_label(key, store_path=LOGO_STORE):
+    """The name to show the user for a channel, rather than its lookup key.
+
+    A Jellyfin recording identifies its channel only by service id, so the
+    key learning works with is "sid:17664" - which is Channel 4 HD, but only
+    to someone who has memorised the numbers.  When the user has paired the
+    id with the name in Remembered logos, the entry knows both, and the name
+    is what every message should say.  An unpaired id has no name to give,
+    so the key itself is returned.
+    """
+    if not key:
+        return key
+    entry = store_get(load_store(store_path), key)
+    if entry is None:
+        cstore = load_cards(card_store_path(store_path))
+        entry = next((e for e in cstore.get("channels", [])
+                      if key in e.get("keys", [])), None)
+    return (store_display_name(entry) if entry else "") or key
+
+
+# --- programme markers (item 1z) --------------------------------------------
+#
+# Many channels show the same frame near the start or end of every programme -
+# Film4's sponsor card, Sky Mix's continuity, ITV's blue end board - but a
+# second or several away from where the user cuts.  Learned from corrected
+# projects, a marker cannot place an edge by itself; what it can do is REFINE
+# the edge today's detection already placed: the sighting nearest that edge
+# predicts where the programme really starts or ends, and the edge snaps to
+# the strongest black/silence there.  Measured leave-one-out on the corpus
+# (dev/scripts/programme-edge-snap.py, 2026-10-02): programme edges within
+# 2 s rose from 25 of 67 to 37, none worse - Film4, Channel 4, U&Dave's tails,
+# ITV1 HD and Sky Mix gained.
+#
+# It only REFINES: an edge today's detection did not place is left alone.  A
+# recording that starts straight into the programme (tptv3) would otherwise
+# risk a lead-in invented from a marker seen at a break.  It costs no decode -
+# the card frames are already decoded for edge cards - and under 0.1 s of
+# arithmetic per recording.
+
+MARKER_WINDOW = 6.0        # seconds either side of an edge a marker comes from
+MARKER_CLEAR = 15.0        # a marker frame must be this far from the programme
+MARKER_DARK = 24.0         # mean level below this is black, never a marker
+MARKER_SEARCH = 30.0       # a sighting must predict an edge this near today's
+MARKER_SNAP = 3.0          # snap to black/silence within this of the prediction
+MARKER_RUN_GAP = 1.0       # sightings this close together are one sighting
+MARKER_EDGE_NEAR = 5.0     # a CORRECTED cut this near the file's end is padding
+# Where today's DETECTION put the padding.  Run 41 found refine_edge() leaves
+# a trim's outer edge several seconds in (tails stopped 7-16 s short of the
+# end) and that lead-ins are often FRAGMENTED, their inner break starting
+# 98-334 s in - the first version demanded within 5 s and skipped them all.
+# Across that run every break starting in the first 334 s was lead-in, and
+# the earliest genuine first break started at 852 s (skymix2): so a break
+# starting within 6 minutes is lead-in, and the latest-ending such break
+# holds its inner edge, as score() measures it.  Tails were NOT clean - a
+# genuine late break ended 1179 s from the end where legend's tail ended
+# 1190 s from it - so only a last break reaching within a minute of the end
+# counts, and a tail cut short further in is left as it is.
+#
+# 360 s rests on ONE user's corpus, every recording padded 3 minutes before.
+# A recording WITHOUT padding can have a genuine break that early - a cold
+# open and a break three minutes in is common on imported series.  So it is
+# only a ceiling: each project records where its programme really started,
+# and a break is lead-in only if it starts no later than the channel's
+# latest learned programme start plus MARKER_HEAD_MARGIN.  A user who never
+# pads never trims a lead-in, so learns no start markers and this never
+# touches their recordings; one who pads sets the reach from his own cuts.
+MARKER_HEAD_REACH = 360.0
+MARKER_HEAD_MARGIN = 60.0
+MARKER_TAIL_REACH = 60.0
+# Every frame of the 6 s window, as the measurement used.  The first version
+# kept the first six ONSETS - the end of the window FURTHEST from the cut -
+# and so threw away markers sitting 1.5-4.6 s from it: U&Dave's end marker at
+# about -2 s went, and u&dave3's tail found no sighting at all (run 41).
+MARKER_PER_PLACE = 12      # onsets kept per place per project
+MARKER_PROJECTS_MAX = 6    # projects a channel keeps; the oldest goes first
+MARKER_STORE_VERSION = 1
+# place: (edge, window start, window end) relative to that edge
+MARKER_PLACES = {
+    "before-start": ("start", -MARKER_WINDOW, 0.0),
+    "after-start": ("start", 0.0, MARKER_WINDOW),
+    "before-end": ("end", -MARKER_WINDOW, 0.0),
+    "after-end": ("end", 0.0, MARKER_WINDOW),
+}
+
+
+def marker_store_path(logo_store_path=LOGO_STORE):
+    """The marker store beside a logo store, named as card_store_path()."""
+    folder, name = os.path.split(logo_store_path)
+    if "logos" in name:
+        name = name.replace("logos", "markers")
+    else:
+        root, ext = os.path.splitext(name)
+        name = root + "-markers" + (ext or ".json")
+    return os.path.join(folder, name)
+
+
+def load_markers(path):
+    """The marker store; a missing or unreadable file is an empty one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, dict) and isinstance(raw.get("channels"), list):
+            return raw
+    except Exception:
+        pass
+    return {"version": MARKER_STORE_VERSION, "channels": []}
+
+
+def save_markers(store, path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    store.setdefault("version", MARKER_STORE_VERSION)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(store, fh, indent=1)
+    os.replace(tmp, path)
+
+
+def _fp_encode(fp):
+    """A card frame as compact text: its bytes, base64.  A JSON list of 432
+    numbers would make each project's markers several times the size."""
+    arr = np.clip(np.rint(np.asarray(fp, dtype=np.float32)), 0, 255)
+    return base64.b64encode(arr.astype(np.uint8).tobytes()).decode("ascii")
+
+
+def _fp_decode(text):
+    raw = np.frombuffer(base64.b64decode(text), dtype=np.uint8)
+    return raw.astype(np.float32).reshape(CARD_H, CARD_W, 3)
+
+
+def markers_get(store, key):
+    """The projects a channel has learned markers from, oldest first."""
+    for entry in store.get("channels", []):
+        if key in entry.get("keys", []):
+            return list(entry.get("projects", []))
+    return []
+
+
+def markers_set(store, key, projects):
+    channels = store.setdefault("channels", [])
+    for entry in channels:
+        if key in entry.get("keys", []):
+            entry["projects"] = projects
+            return
+    channels.append({"keys": [key], "projects": projects})
+
+
+def channel_markers(marker_store, logo_store, key):
+    """Marker projects for a channel under ANY of its names - the same
+    aliasing channel_cards() does, through the logo store's pairings."""
+    entry = store_get(logo_store, key)
+    keys = list(entry.get("keys", [])) if entry else []
+    if key not in keys:
+        keys.insert(0, key)
+    held, seen = [], set()
+    for k in keys:
+        for project in markers_get(marker_store, k):
+            name = project.get("project")
+            if name not in seen:
+                seen.add(name)
+                held.append(project)
+    return held
+
+
+def add_marker_project(held, learned, project):
+    """File one project's markers, replacing an earlier learn of the same
+    project rather than counting it twice, and keeping the newest few."""
+    held = [p for p in held if p.get("project") != project]
+    held.append(dict(learned, project=project))
+    return held[-MARKER_PROJECTS_MAX:]
+
+
+def _programme_edges(cuts, end):
+    """The corrected programme's start and end, where the cuts trim padding."""
+    edges = {}
+    cuts = sorted(cuts)
+    if cuts and cuts[0][0] <= MARKER_EDGE_NEAR:
+        edges["start"] = cuts[0][1]
+    if cuts and cuts[-1][1] >= end - MARKER_EDGE_NEAR:
+        edges["end"] = cuts[-1][0]
+    return edges
+
+
+def learn_programme_markers(cards, times, cuts):
+    """The frames marking this corrected programme's edges, or None.
+
+    For each place either side of each edge: the frames that are not black
+    and that the programme itself never comes near - a frame the programme
+    also shows cannot mark its edge.  Only the ONSET of each run of identical
+    frames is kept, with its offset from the cut: a card is many identical
+    frames, and its first one is what a sighting is lined up with.
+    """
+    if cards is None or not len(times):
+        return None
+    cards = np.asarray(cards, dtype=np.float32)
+    edges = _programme_edges(cuts, float(times[-1]))
+    if not edges:
+        return None
+    body = np.ones(len(times), dtype=bool)
+    for a, b in cuts:
+        body &= ~((times >= a - 1.0) & (times <= b + 1.0))
+    for e in edges.values():
+        body &= ~((times >= e - MARKER_WINDOW) & (times < e + MARKER_WINDOW))
+    flat_body = cards[body].reshape(int(body.sum()), -1) if body.any() else None
+    places = {}
+    for place, (side, lo, hi) in MARKER_PLACES.items():
+        if side not in edges:
+            continue
+        edge = edges[side]
+        idx = np.where((times >= edge + lo) & (times < edge + hi))[0]
+        kept = []
+        last = None
+        for i in idx:
+            fp = cards[i]
+            if float(fp.mean()) < MARKER_DARK:
+                last = None
+                continue
+            if flat_body is not None and float(
+                    np.abs(flat_body - fp.reshape(-1)).mean(axis=1).min()
+            ) <= MARKER_CLEAR:
+                last = None
+                continue
+            if last is not None and float(np.abs(fp - last).mean()) < CARD_MATCH:
+                continue                       # the same frame again: not an onset
+            last = fp
+            kept.append({"fp": _fp_encode(fp),
+                         "offset": round(float(times[i] - edge), 2)})
+            if len(kept) >= MARKER_PER_PLACE:
+                break
+        if kept:
+            places[place] = kept
+    if not places:
+        return None
+    learned = {"places": places}
+    if "start" in edges:
+        # Where this programme really started - see MARKER_HEAD_MARGIN.
+        learned["start"] = round(float(edges["start"]), 2)
+    return learned
+
+
+def place_programme_markers(breaks, cards, times, projects, events, duration,
+                            report, exclude=None):
+    """Refine the lead-in's and the tail's inner edges from learned markers.
+
+    `breaks` holds today's placement; the lead-in is a break from the start
+    of the file and the tail one to its end.  For each, the marker sightings
+    near today's edge each predict an edge (sighting onset minus the median
+    learned onset offset); the prediction nearest today's edge is taken if it
+    is within MARKER_SEARCH of it, and snapped to the strongest black/silence
+    within MARKER_SNAP, weighed against distance as refine_edge() does.
+
+    `exclude` names a project whose markers must not be used - the recording
+    being scanned.  A corpus run scans recordings whose own corrections are in
+    the store; matching a recording against itself would line up perfectly
+    and report a result far better than the truth.
+
+    Returns (breaks, number of edges moved).
+    """
+    projects = [p for p in projects if p.get("project") != exclude]
+    if not breaks or not projects or cards is None or not len(times):
+        return breaks, 0
+    cards = np.asarray(cards, dtype=np.float32)
+    breaks = sorted(tuple(b) for b in breaks)
+    end = float(duration or times[-1])
+    # Which break holds each padding edge - see MARKER_HEAD_REACH.  The
+    # reach comes from this channel's own learned programme starts where the
+    # projects record them, never beyond the ceiling.
+    starts = [float(p["start"]) for p in projects if p.get("start") is not None]
+    reach = (min(MARKER_HEAD_REACH, max(starts) + MARKER_HEAD_MARGIN)
+             if starts else MARKER_HEAD_REACH)
+    heads = [i for i, b in enumerate(breaks) if b[0] <= reach]
+    head_i = max(heads, key=lambda i: breaks[i][1]) if heads else None
+    tail_i = (len(breaks) - 1
+              if end - breaks[-1][1] <= MARKER_TAIL_REACH else None)
+    if head_i is not None and head_i == tail_i:
+        # One break from the start to the end: no programme between them.
+        report.append("programme edges: one break covers the recording - "
+                      "unchanged")
+        return breaks, 0
+    moved = 0
+    for side in ("start", "end"):
+        index = head_i if side == "start" else tail_i
+        if index is None:
+            report.append(f"programme {side}: no "
+                          f"{'lead-in' if side == 'start' else 'tail'} "
+                          f"placed - unchanged")
+            continue
+        today = breaks[index][1] if side == "start" else breaks[index][0]
+        # One list of (fingerprint, offset) per stored project.
+        sources = []
+        for project in projects:
+            src = [(_fp_decode(m["fp"]), float(m["offset"]))
+                   for place, (pside, _lo, _hi) in MARKER_PLACES.items()
+                   if pside == side
+                   for m in project.get("places", {}).get(place, [])]
+            if src:
+                sources.append(src)
+        if not sources:
+            continue
+        every = np.stack([fp.reshape(-1) for src in sources for fp, _ in src])
+        reach = MARKER_SEARCH + MARKER_WINDOW
+        idx = np.where(np.abs(times - today) <= reach)[0]
+        hit = [i for i in idx
+               if float(np.abs(every - cards[i].reshape(-1)).mean(axis=1).min())
+               < CARD_MATCH]
+        runs = []
+        for i in hit:
+            if runs and times[i] - times[runs[-1][-1]] <= MARKER_RUN_GAP:
+                runs[-1].append(i)
+            else:
+                runs.append([i])
+        predictions = []
+        for run in runs:
+            first = cards[run[0]]
+            onsets = []
+            for src in sources:
+                offs = [off for fp, off in src
+                        if float(np.abs(fp - first).mean()) < CARD_MATCH]
+                if offs:
+                    onsets.append(min(offs))
+            if onsets:
+                predictions.append(float(times[run[0]] - np.median(onsets)))
+        near = [p for p in predictions if abs(p - today) <= MARKER_SEARCH]
+        if not near:
+            report.append(f"programme {side}: no marker sighting within "
+                          f"{MARKER_SEARCH:.0f}s of {today:.1f}s - unchanged")
+            continue
+        predicted = min(near, key=lambda p: abs(p - today))
+        snaps = [(m, sc) for m, sc in events if abs(m - predicted) <= MARKER_SNAP]
+        edge = (max(snaps, key=lambda ms: ms[1] - EDGE_DISTANCE_COST
+                    * abs(ms[0] - predicted))[0] if snaps else predicted)
+        # Never across a neighbouring break, never inside out.
+        a, b = breaks[index]
+        if side == "start":
+            limit = breaks[index + 1][0] if index + 1 < len(breaks) else end
+            if not (a < edge < limit):
+                report.append(f"programme start: {edge:.1f}s would cross a "
+                              f"neighbouring break - unchanged")
+                continue
+            breaks[index] = (a, edge)
+        else:
+            limit = breaks[index - 1][1] if index > 0 else 0.0
+            if not (limit < edge < b):
+                report.append(f"programme end: {edge:.1f}s would cross a "
+                              f"neighbouring break - unchanged")
+                continue
+            breaks[index] = (edge, b)
+        moved += 1
+        report.append(f"programme {side}: {today:.1f}s -> {edge:.1f}s "
+                      f"(marker predicted {predicted:.1f}s, "
+                      f"{len(sources)} project(s))")
+    return breaks, moved
+
+
 def cards_set(store, key, cards):
     channels = store.setdefault("channels", [])
     for entry in channels:
@@ -4495,6 +4922,19 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
         info["skipped"] = "the recording does not say which channel it is from"
         return info
     info["channel"] = key
+    # What to call it in messages: the name when the key is a service id the
+    # user has paired with one.  `channel` stays the key - it is what the
+    # stores are searched by.
+    label = channel_label(key, store_path)
+    info["label"] = label
+
+    # Switched off by the user for this channel (item 1x).  Checked before
+    # anything else about the channel, because skipping the decode is the
+    # whole point - see learning_enabled().
+    if not learning_enabled(key, store_path):
+        info["skipped"] = (f"learning is switched off for {label} in "
+                           f"Remembered logos")
+        return info
 
     # A channel that already has a logo used to stop here, so one poor edit
     # could not quietly undo a good mask.  It cannot now either: the masks
@@ -4512,7 +4952,7 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
             and all(r.get("fit", True) for r in on.values())
         )
         if settled and not corrected:
-            info["skipped"] = (f"{key}'s logo is settled and this project "
+            info["skipped"] = (f"{label}'s logo is settled and this project "
                                f"agrees with what was proposed")
             return info
 
@@ -4526,7 +4966,7 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
 
     # Past every cheap check now, so this is about to be the expensive part.
     if on_start is not None:
-        on_start(key)
+        on_start(label)
 
     started = time.monotonic()
     try:
@@ -4590,6 +5030,10 @@ def learn_from_project(video, vprj_path, store_path=LOGO_STORE, channel=None,
     if detected.get("card_learned") is not None:
         info["card"] = detected["card_learned"]
         info["cards_held"] = detected.get("cards_held", 1)
+    # Programme markers (item 1z), likewise filed by detect() already.
+    if detected.get("markers_learned"):
+        info["markers_learned"] = detected["markers_learned"]
+        info["marker_projects"] = detected.get("marker_projects", 1)
 
     info["report"] = detected.get("learn_report", [])
     if detected.get("learned"):

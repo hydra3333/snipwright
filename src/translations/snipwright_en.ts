@@ -1835,9 +1835,8 @@ Yes = append,  No = replace the current list.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../ui/logo_store_dialog.py" line="162"/>
         <source>Chalkline learns each channel&apos;s logo when you correct a detection and save the project. A recorder that keeps the channel name gives a name here; one that keeps the service number gives a number. They are the same channel, but Snipwright cannot tell - fill in the missing half of a row and the logo will be used for recordings from both.</source>
-        <translation type="unfinished"></translation>
+        <translation type="vanished"></translation>
     </message>
     <message>
         <location filename="../ui/logo_store_dialog.py" line="176"/>
@@ -1948,6 +1947,87 @@ Chalkline will learn it again the next time you correct a detection for that cha
         <source>The logo list could not be saved:
 
 %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="275"/>
+        <source>Idents</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="276"/>
+        <source>Learn</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="486"/>
+        <source>Learn from the projects you correct on this channel. Untick it once the channel detects well: what it has learned is still used, and saving a correction no longer starts a learning pass.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="505"/>
+        <source>No logo - this channel is recognised by the ident at the edges of its breaks. The picture is the most recent one learned.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="508"/>
+        <source>No logo</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="589"/>
+        <source>%s will learn from the projects you correct again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="593"/>
+        <source>%s will no longer learn from your corrections. What it has learned is still used to find its breaks.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="257"/>
+        <source>Chalkline learns each channel&apos;s logo, and any ident it shows at the edges of its breaks, when you correct a detection and save the project. A recorder that keeps the channel name gives a name here; one that keeps the service number gives a number. They are the same channel, but Snipwright cannot tell - fill in the missing half of a row and what was learned will be used for recordings from both. Untick Learn for a channel that already detects well: what it has learned is still used, but correcting it no longer spends minutes learning again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="770"/>
+        <source>A channel needs at least one of Channel or Service ID. Use Forget to remove it entirely.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="787"/>
+        <source>“%s” has a remembered logo. Joining them makes this channel&apos;s idents part of that channel, so both are used together.
+
+Join them?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="803"/>
+        <source>Joined: %s now uses this channel&apos;s idents with its logo.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="814"/>
+        <source>“%s” already has idents of its own. Joining them keeps all of them under the one channel.
+
+Join them?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="831"/>
+        <source>Joined into one channel holding %d ident(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="875"/>
+        <source>Forget idents</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="877"/>
+        <source>Forget the idents remembered for “%s”?
+
+Chalkline will learn them again the next time you correct a detection for that channel and save the project.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3012,6 +3092,46 @@ Quit anyway?</source>
     <message>
         <location filename="../main.py" line="1890"/>
         <source>Send to Batch</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1420"/>
+        <source>System</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1421"/>
+        <source>FFmpeg inside PyAV</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1422"/>
+        <source>FFmpeg program</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1429"/>
+        <source>not found</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1433"/>
+        <source>%(version)s - tested with %(tested)s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1445"/>
+        <source>Running on</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1460"/>
+        <source>Copy details</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1464"/>
+        <source>Copied</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

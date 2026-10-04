@@ -255,41 +255,40 @@ def ranges_to_segments(source, keep_ranges, frame_index=None):
 def _audio_stream_decodes(source_path, stream_index, max_seconds=20):
     """True if an audio stream yields at least one decoded frame.
 
-    Used only when the container header gives no channel count or sample rate,
-    which happens on some broadcast audio-description tracks.  The header being
-    blank means the parameters could not be determined, not that the stream is
+    Used only when the container gives no channel count or sample rate,
+    which happens on some broadcast audio-description tracks.  Blank
+    parameters mean they could not be determined, not that the stream is
     empty - so ask the decoder, which is the only thing that settles it.
 
-    Reads a bounded window from the start of the stream rather than the whole
-    file: a track that carries anything at all produces frames straight away,
-    and a recording can be several gigabytes.  A stream that genuinely holds
-    nothing yields nothing here and is correctly dropped.
+    `stream_index` is PyAV's index, the same numbering the cutter uses - see
+    _usable_audio_tracks() for why that matters.  Reads a bounded window
+    from the start of the stream rather than the whole file: a track that
+    carries anything at all produces frames straight away, and a recording
+    can be several gigabytes.  A stream that genuinely holds nothing yields
+    nothing here and is correctly dropped.
     """
+    import av
+    from smartcut.open_options import SOURCE_OPEN_OPTIONS
     try:
-        out = subprocess.run(
-            [
-                "ffprobe", "-hide_banner", "-loglevel", "error",
-                "-select_streams", str(stream_index),
-                "-read_intervals", "%%+%d" % max_seconds,
-                "-show_entries", "frame=nb_samples",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                source_path,
-            ],
-            capture_output=True, text=True, timeout=120,
-        ).stdout
+        with av.open(source_path, options=SOURCE_OPEN_OPTIONS) as container:
+            stream = container.streams[stream_index]
+            first = None
+            for packet in container.demux(stream):
+                if packet.pts is not None:
+                    t = float(packet.pts * stream.time_base)
+                    first = t if first is None else first
+                    if t - first > max_seconds:
+                        break
+                try:
+                    for frame in packet.decode():
+                        if frame.samples > 0:
+                            return True
+                except av.error.FFmpegError:
+                    continue          # one bad packet does not settle it
     except Exception:
         # Never let this decide against a track: if the check itself cannot be
         # run, keeping the audio is the safe answer.
         return True
-
-    for line in out.splitlines():
-        line = line.strip()
-        if line and line != "N/A":
-            try:
-                if int(line) > 0:
-                    return True
-            except ValueError:
-                continue
     return False
 
 
@@ -299,98 +298,74 @@ def _usable_audio_tracks(source_path, n_audio):
     Some broadcast recordings carry a malformed secondary audio track (e.g. a
     visual-impaired "descriptions" track) reporting 0 channels / no sample
     rate.  Passing such a track through corrupts the whole export - smartcut
-    can silently drop the video while struggling with it.  We probe each audio
-    stream and keep only those with a real channel count and sample rate.
+    can silently drop the video while struggling with it.  So each audio
+    stream is checked, and one with no channel count or sample rate is kept
+    only if it actually decodes.
+
+    **Read with PyAV - the library the cutter uses - and nothing else.**
+    This was an ffprobe call with a deep probe (-analyzeduration 30M
+    -probesize 60M), and a deep probe can NUMBER the streams differently from
+    a normal one and can leave a stream out altogether.  A BBC Three HD
+    recording (2026-10-04) has its main audio at stream 1 and a receiver-mix
+    audio-description track at stream 3 - "0 channels (visual impaired)
+    (descriptions) (dependent)" - as PyAV and a normal ffprobe both see it;
+    the deep probe listed ONE audio stream, called it 2 (the video's number
+    elsewhere), and the AD track not at all.  So the track was never even
+    considered, its decode check never ran, and the export dropped it -
+    after 2.3.16 and 2.3.17 had both fixed AD tracks lost a different way.
+    The decode check had the same flaw: a stream number from the deep probe,
+    used in a normal one.  Judging the tracks with the cutter's own reader
+    makes the tracks judged the tracks cut, in the same order and numbering.
 
     Always keeps at least track 0 (so we never end up with no audio at all,
     even if probing is inconclusive).
     """
+    import av
+    from smartcut.open_options import SOURCE_OPEN_OPTIONS
     try:
-        out = subprocess.run(
-            [
-                "ffprobe", "-hide_banner", "-loglevel", "error",
-                # Probe deeply.  A sparse audio-description track can go a long
-                # way into a recording before its parameters become apparent -
-                # a Film4 recording carried a genuine mono AD track that a
-                # default probe reported as "mp3, 0 channels, 0 Hz" and this
-                # function then discarded, silently losing it.  With a longer
-                # window the same stream reads correctly as mp2 48000 Hz mono.
-                "-analyzeduration", "30M", "-probesize", "60M",
-                "-select_streams", "a",
-                "-show_entries",
-                "stream=index,codec_name,channels,sample_rate"
-                ":stream_tags=language"
-                ":stream_disposition=visual_impaired,descriptions",
-                "-of", "default=noprint_wrappers=1",
-                source_path,
-            ],
-            capture_output=True, text=True,
-        ).stdout
-
-        # ffprobe prints a block of key=value lines per stream; for TS files
-        # streams can appear more than once, so we key by the stream index and
-        # map those to audio-track positions in order of first appearance.
-        per_stream = {}        # stream_index -> {"channels":..,"sample_rate":..}
-        order = []             # stream indices in first-seen order
-        cur = None
-        for line in out.splitlines():
-            line = line.strip()
-            if line.startswith("index="):
-                cur = line.split("=", 1)[1]
-                if cur not in per_stream:
-                    per_stream[cur] = {
-                        "channels": 0, "sample_rate": 0, "codec": "?",
-                        "language": "", "described": False,
-                    }
-                    order.append(cur)
-            elif cur is not None and line.startswith("codec_name="):
-                per_stream[cur]["codec"] = line.split("=", 1)[1]
-            elif cur is not None and line.startswith("TAG:language="):
-                per_stream[cur]["language"] = line.split("=", 1)[1]
-            elif cur is not None and (
-                    line.startswith("DISPOSITION:visual_impaired=1")
-                    or line.startswith("DISPOSITION:descriptions=1")):
-                per_stream[cur]["described"] = True
-            elif cur is not None and line.startswith("channels="):
-                try:
-                    per_stream[cur]["channels"] = int(line.split("=", 1)[1])
-                except ValueError:
-                    pass
-            elif cur is not None and line.startswith("sample_rate="):
-                val = line.split("=", 1)[1]
-                try:
-                    per_stream[cur]["sample_rate"] = int(val)
-                except ValueError:
-                    pass
+        # Opened EXACTLY as the cutter opens it (smartcut/open_options.py), so
+        # the verdicts are about the streams it will cut, numbered as it
+        # numbers them, with the parameters it will see.
+        with av.open(source_path, options=SOURCE_OPEN_OPTIONS) as container:
+            streams = [
+                (s.index,
+                 int(getattr(s.codec_context, "channels", 0) or 0),
+                 int(s.codec_context.sample_rate or 0),
+                 s.codec_context.name or "?",
+                 s.metadata.get("language", "") or "",
+                 bool(s.disposition & (av.stream.Disposition.visual_impaired
+                                       | av.stream.Disposition.descriptions)))
+                for s in container.streams.audio
+            ]
 
         usable = []
-        for audio_idx, sidx in enumerate(order):
-            info = per_stream[sidx]
+        for audio_idx, (sidx, channels, rate, codec, language, described) \
+                in enumerate(streams):
             label = []
-            if info.get("language"):
-                label.append(info["language"])
-            if info.get("described"):
+            if language:
+                label.append(language)
+            if described:
                 label.append("audio description")
             logger.info(
                 "Audio track %d (source stream %s%s): codec=%s, channels=%d, "
                 "sample_rate=%d",
                 audio_idx, sidx,
                 (", " + ", ".join(label)) if label else "",
-                info["codec"], info["channels"], info["sample_rate"],
+                codec, channels, rate,
             )
-            if info["channels"] > 0 and info["sample_rate"] > 0:
+            if channels > 0 and rate > 0:
                 usable.append(audio_idx)
             elif _audio_stream_decodes(source_path, sidx):
-                # The header said nothing, but the stream decodes, so it
+                # The container said nothing, but the stream decodes, so it
                 # carries audio and must be kept.
                 #
-                # A zero from the header means "ffprobe could not work the
-                # parameters out", which is not the same as "there is no
-                # sound here" - and treating the two as equivalent silently
-                # threw away real audio-description tracks.  Deeper probing
-                # was tried first and is not enough: a BBC One recording with
-                # a genuine AD track still read as "mp3, 0 channels, 0 Hz"
-                # with a 100 MB probe, while decoding its very first packets
+                # A zero here means "the parameters could not be worked
+                # out", which is not the same as "there is no sound" - and
+                # treating the two as equivalent silently threw away real
+                # audio-description tracks (2.3.16).  Deeper probing was
+                # tried first and is not enough: a BBC One recording with a
+                # genuine AD track still read as "mp3, 0 channels, 0 Hz" with
+                # a 100 MB probe, while decoding its very first packets
                 # returned mono 1152-sample frames without difficulty.
                 #
                 # UK broadcast AD is often a receiver-mix track, carrying only
@@ -413,6 +388,13 @@ def _usable_audio_tracks(source_path, n_audio):
                     audio_idx, sidx,
                     (", " + ", ".join(label)) if label else "",
                 )
+        if len(streams) != n_audio:
+            # The cutter counted differently: keep everything rather than
+            # guess which of its tracks these verdicts belong to.
+            logger.warning(
+                "Audio probe found %d audio track(s) where the cutter has "
+                "%d; keeping all of them.", len(streams), n_audio)
+            return list(range(n_audio))
 
     except Exception:
         # If probing fails entirely, fall back to "all tracks".
@@ -3971,9 +3953,16 @@ def _finalise_ts_audio_meta(path, ad_source=None, progress_cb=None):
             "registered them but transmitted nothing in the kept section.",
             len(dead),
         )
+    # Read deep, as _unwritable_audio_streams() just did.  Opened with the
+    # default probe, a receiver-mix AD track that the deep probe reads as
+    # 48 kHz stereo has no sample rate, and ffmpeg refuses to write it:
+    # "Error opening output files: Invalid argument", rc=234 - the failure
+    # item 1k had been watching for, reproduced on a BBC Three HD recording's
+    # opening minutes (2026-10-04).  The two checks disagreed, so the track
+    # was neither dropped as empty nor written.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", path,
+        *DEEP_PROBE, "-i", path,
         "-map", "0", "-map", "-0:d", "-ignore_unknown",
     ]
     for a in dead:

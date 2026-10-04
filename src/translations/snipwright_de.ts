@@ -1867,9 +1867,8 @@ Ja = anhängen,  Nein = aktuelle Liste ersetzen.</translation>
         <translation>Gemerkte Logos</translation>
     </message>
     <message>
-        <location filename="../ui/logo_store_dialog.py" line="162"/>
         <source>Chalkline learns each channel&apos;s logo when you correct a detection and save the project. A recorder that keeps the channel name gives a name here; one that keeps the service number gives a number. They are the same channel, but Snipwright cannot tell - fill in the missing half of a row and the logo will be used for recordings from both.</source>
-        <translation>Chalkline lernt das Logo eines Senders, wenn Sie eine Erkennung korrigieren und das Projekt speichern. Ein Aufnahmegerät, das den Sendernamen speichert, liefert hier einen Namen; eines, das die Dienstnummer speichert, liefert eine Nummer. Es ist derselbe Sender, doch Snipwright kann das nicht erkennen – ergänzen Sie die fehlende Hälfte einer Zeile, und das Logo wird für Aufnahmen aus beiden Quellen verwendet.</translation>
+        <translation type="vanished">Chalkline lernt das Logo eines Senders, wenn Sie eine Erkennung korrigieren und das Projekt speichern. Ein Aufnahmegerät, das den Sendernamen speichert, liefert hier einen Namen; eines, das die Dienstnummer speichert, liefert eine Nummer. Es ist derselbe Sender, doch Snipwright kann das nicht erkennen – ergänzen Sie die fehlende Hälfte einer Zeile, und das Logo wird für Aufnahmen aus beiden Quellen verwendet.</translation>
     </message>
     <message>
         <location filename="../ui/logo_store_dialog.py" line="176"/>
@@ -1987,6 +1986,93 @@ Chalkline lernt es erneut, sobald Sie das nächste Mal eine Erkennung für diese
         <translation>Die Logo-Liste konnte nicht gespeichert werden:
 
 %s</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="275"/>
+        <source>Idents</source>
+        <translation>Idents</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="276"/>
+        <source>Learn</source>
+        <translation>Lernen</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="486"/>
+        <source>Learn from the projects you correct on this channel. Untick it once the channel detects well: what it has learned is still used, and saving a correction no longer starts a learning pass.</source>
+        <translation>Aus den Projekten lernen, die Sie bei diesem Sender korrigieren. Entfernen Sie das Häkchen, sobald der Sender gut erkannt wird: Was er gelernt hat, wird weiterhin verwendet, und das Speichern einer Korrektur startet keinen Lerndurchgang mehr.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="505"/>
+        <source>No logo - this channel is recognised by the ident at the edges of its breaks. The picture is the most recent one learned.</source>
+        <translation>Kein Logo – dieser Sender wird am Ident an den Rändern seiner Unterbrechungen erkannt. Das Bild zeigt das zuletzt gelernte.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="508"/>
+        <source>No logo</source>
+        <translation>Kein Logo</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="589"/>
+        <source>%s will learn from the projects you correct again.</source>
+        <translation>%s lernt wieder aus den Projekten, die Sie korrigieren.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="593"/>
+        <source>%s will no longer learn from your corrections. What it has learned is still used to find its breaks.</source>
+        <translation>%s lernt nicht mehr aus Ihren Korrekturen. Was er gelernt hat, wird weiterhin verwendet, um seine Unterbrechungen zu finden.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="257"/>
+        <source>Chalkline learns each channel&apos;s logo, and any ident it shows at the edges of its breaks, when you correct a detection and save the project. A recorder that keeps the channel name gives a name here; one that keeps the service number gives a number. They are the same channel, but Snipwright cannot tell - fill in the missing half of a row and what was learned will be used for recordings from both. Untick Learn for a channel that already detects well: what it has learned is still used, but correcting it no longer spends minutes learning again.</source>
+        <translation>Chalkline lernt das Logo eines Senders – und ein Ident, das er an den Rändern seiner Unterbrechungen zeigt –, wenn Sie eine Erkennung korrigieren und das Projekt speichern. Ein Aufnahmegerät, das den Sendernamen speichert, liefert hier einen Namen; eines, das die Dienstnummer speichert, liefert eine Nummer. Es ist derselbe Sender, doch Snipwright kann das nicht erkennen – ergänzen Sie die fehlende Hälfte einer Zeile, und das Gelernte wird für Aufnahmen aus beiden Quellen verwendet. Entfernen Sie das Häkchen bei „Lernen“ für einen Sender, der bereits gut erkannt wird: Was er gelernt hat, wird weiterhin verwendet, aber eine Korrektur löst kein minutenlanges erneutes Lernen mehr aus.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="770"/>
+        <source>A channel needs at least one of Channel or Service ID. Use Forget to remove it entirely.</source>
+        <translation>Ein Sender braucht mindestens einen Eintrag unter Sender oder Dienst-ID. Verwenden Sie „Verwerfen“, um ihn vollständig zu entfernen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="787"/>
+        <source>“%s” has a remembered logo. Joining them makes this channel&apos;s idents part of that channel, so both are used together.
+
+Join them?</source>
+        <translation>„%s“ hat ein gemerktes Logo. Beim Zusammenführen werden die Idents dieses Senders Teil jenes Senders, sodass beides gemeinsam verwendet wird.
+
+Zusammenführen?</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="803"/>
+        <source>Joined: %s now uses this channel&apos;s idents with its logo.</source>
+        <translation>Zusammengeführt: %s verwendet die Idents dieses Senders nun zusammen mit seinem Logo.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="814"/>
+        <source>“%s” already has idents of its own. Joining them keeps all of them under the one channel.
+
+Join them?</source>
+        <translation>„%s“ hat bereits eigene Idents. Beim Zusammenführen bleiben alle unter dem einen Sender erhalten.
+
+Zusammenführen?</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="831"/>
+        <source>Joined into one channel holding %d ident(s).</source>
+        <translation>Zu einem Sender mit %d Ident(s) zusammengeführt.</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="875"/>
+        <source>Forget idents</source>
+        <translation>Idents verwerfen</translation>
+    </message>
+    <message>
+        <location filename="../ui/logo_store_dialog.py" line="877"/>
+        <source>Forget the idents remembered for “%s”?
+
+Chalkline will learn them again the next time you correct a detection for that channel and save the project.</source>
+        <translation>Die für „%s“ gemerkten Idents verwerfen?
+
+Chalkline lernt sie erneut, sobald Sie das nächste Mal eine Erkennung für diesen Sender korrigieren und das Projekt speichern.</translation>
     </message>
 </context>
 <context>
@@ -3140,6 +3226,46 @@ Fortfahren?</translation>
         <location filename="../main.py" line="1890"/>
         <source>Send to Batch</source>
         <translation>An Stapel senden</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1420"/>
+        <source>System</source>
+        <translation>System</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1421"/>
+        <source>FFmpeg inside PyAV</source>
+        <translation>FFmpeg in PyAV</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1422"/>
+        <source>FFmpeg program</source>
+        <translation>FFmpeg-Programm</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1429"/>
+        <source>not found</source>
+        <translation>nicht gefunden</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1433"/>
+        <source>%(version)s - tested with %(tested)s</source>
+        <translation>%(version)s – getestet mit %(tested)s</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1445"/>
+        <source>Running on</source>
+        <translation>Verwendete Komponenten</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1460"/>
+        <source>Copy details</source>
+        <translation>Details kopieren</translation>
+    </message>
+    <message>
+        <location filename="../main.py" line="1464"/>
+        <source>Copied</source>
+        <translation>Kopiert</translation>
     </message>
 </context>
 <context>
